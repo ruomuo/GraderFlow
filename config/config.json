@@ -1,0 +1,31 @@
+{
+    "objective_answer_path": "answer_config\\answer_multiple.txt",
+    "subjective_answer_path": "answer_config\\test_subjective_answer.txt",
+    "api_key": "enc:c2stc3AtNzE0NTkwOGJiYTkxNGZlN2EzNzNiYjZjMzhhZTM0NzE=",
+    "api_base_url": "https://coding.dashscope.aliyuncs.com/v1",
+    "model_name": "qwen3.5-plus",
+    "available_models": [
+        "zai-org/GLM-4.6V",
+        "Qwen/Qwen3-VL-8B-Instruct",
+        "Qwen/Qwen3-VL-8B-Thinking",
+        "Qwen/Qwen3-VL-32B-Instruct",
+        "Qwen/Qwen3-VL-32B-Thinking",
+        "Qwen/Qwen3-VL-30B-A3B-Instruct",
+        "Qwen/Qwen3-VL-30B-A3B-Thinking",
+        "Qwen/Qwen3-VL-235B-A22B-Instruct",
+        "Qwen/Qwen3-VL-235B-A22B-Thinking",
+        "Qwen/Qwen3.5-35B-A3B",
+        "Qwen3.5-397B-A17B",
+        "qwen3.5-plus"
+    ],
+    "auto_load_config": true,
+    "last_updated": "2026-03-17 19:44:25",
+    "enable_student_info": true,
+    "objective_scoring_rule": "partial_penalty",
+    "recognition": {
+        "mode": "A",
+        "layout": "row",
+        "group_size": 5,
+        "conf_thres": 0.75
+    }
+}

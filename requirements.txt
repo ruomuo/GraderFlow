@@ -1,0 +1,18 @@
+PySide6>=6.0.0
+opencv-python>=4.5.0
+numpy>=1.18.5
+pandas>=1.2.0
+torch>=1.7.0
+torchvision>=0.8.0
+requests>=2.25.0
+flask>=2.0.0
+openai>=1.0.0
+Pillow>=8.0.0
+PyYAML>=5.3.1
+tqdm>=4.60.0
+matplotlib>=3.3.0
+seaborn>=0.11.0
+psutil>=5.8.0
+wmi; sys_platform == 'win32'
+ultralytics>=8.0.0
+cryptography>=3.4.0
