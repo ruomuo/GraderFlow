@@ -377,7 +377,7 @@ def recognize_answer_sheet(
     if options_config is None:
         options_config = {}
     
-    debug_mode = True # Enable debug output
+    debug_mode = False
     
     # 读取图像并初始化参数
     image = cv2.imread(image_path)
@@ -444,8 +444,8 @@ def recognize_answer_sheet(
         # 基本几何特征筛选
         # 对于矩形填涂框，放宽宽高比限制，降低面积阈值
         if (0.3 < aspect_ratio < 2.5 and
-            area > 300 and  # 降低最小面积阈值，避免过滤小轮廓
-            w > 8 and h > 8):  # 降低最小尺寸阈值
+            area > 300 and
+            w > 8 and h > 8):
             answer_contours.append((x, y, w, h))
             contour_areas.append(area)
             # print(f"有效轮廓: X={x} Y={y} W={w} H={h} 面积={area} 宽高比={aspect_ratio:.2f}")
@@ -607,6 +607,28 @@ def recognize_answer_sheet(
             layout = "row"
 
         if layout == "row":
+            expected_option_count_global = default_option_count
+            if options_config:
+                try:
+                    expected_option_count_global = int(np.median(list(options_config.values())))
+                except Exception:
+                    expected_option_count_global = default_option_count
+
+            x_positions = [x for (x, y, w, h) in answer_contours]
+            unique_cols = []
+            col_threshold = avg_w * 0.8
+            for x0 in sorted(set(x_positions)):
+                if not unique_cols or abs(x0 - unique_cols[-1]) > col_threshold:
+                    unique_cols.append(x0)
+
+            if len(unique_cols) >= 2 and len(unique_cols) < expected_option_count_global:
+                col_steps = [unique_cols[i + 1] - unique_cols[i] for i in range(len(unique_cols) - 1)]
+                step_estimate = float(np.median(col_steps)) if col_steps else 0.0
+                if step_estimate > max(avg_w * 0.6, 10):
+                    projected_right = int(base_min_x + step_estimate * expected_option_count_global)
+                    if projected_right > base_max_right:
+                        base_max_right = min(projected_right, width - 1)
+
             y_positions = [y for (x, y, w, h) in answer_contours]
             unique_rows = []
             row_threshold = avg_h * 0.8
@@ -845,7 +867,7 @@ def recognize_answer_sheet(
     img_h, img_w = thresh.shape[:2]
 
     # Define debug_mode safely
-    debug_mode = True
+    debug_mode = False
 
     gray_means = {}
     gray_mean_values = []
@@ -1681,47 +1703,4 @@ def recognize_answer_main(mode="B", question_types_file=None, start_number=1, an
 
 # 使用示例
 if __name__ == "__main__":
-    # 测试A模式批量识别
-    #recognize_answer_main(r"E:\code_space\code_python\MarkingSystem\runs\detect\exp\crops\answerArea", "A")
-    # 加载题型配置
-    # from core.omr.question_parser import parse_question_types # Already imported at top
-    
-    # 尝试查找配置文件
-    config_path = "question_types.txt"
-    if not os.path.exists(config_path):
-        # 尝试默认位置
-        default_path = os.path.join(project_root, "config", "answer_config", "question_types.txt")
-        if os.path.exists(default_path):
-            config_path = default_path
-            
-    try:
-        question_types = parse_question_types(config_path)
-    except Exception as e:
-        print(f"Warning: Could not load question types from {config_path}: {e}")
-        question_types = {}
-
-    # 加载选项数量配置
-    options_config = {}
-    answer_config_path = "answer_multiple.txt"
-    if not os.path.exists(answer_config_path):
-        default_ans_path = os.path.join(project_root, "config", "answer_config", "answer_multiple.txt")
-        if os.path.exists(default_ans_path):
-            answer_config_path = default_ans_path
-            
-    try:
-        _, _, options_config = parse_multiple_choice_answers(answer_config_path)
-        print(f"Loaded options config for {len(options_config)} questions")
-    except Exception as e:
-        print(f"Warning: Could not load options config: {e}")
-
-    # 测试单个答题卡识别，指定起始题号为1
-    result, _ = recognize_answer_sheet(
-        r"E:\code_space\code_python\MarkingSystem\runs\detect\exp\crops\answerArea\sheet16.jpg",
-        question_types=question_types,
-        options_config=options_config,
-        start_question_num=1
-    )
-    
-    print("识别结果:")
-    for question_num, answer in result.items():
-        print(f"题目 {question_num}: {answer}")
+    print("请在 test_script 目录下运行测试脚本")

@@ -3,6 +3,7 @@ import io
 import base64
 import re
 import json
+import time
 from openai import OpenAI, APIConnectionError, RateLimitError, APIStatusError, AuthenticationError, APITimeoutError
 from utils.config_manager import config_manager
 
@@ -47,6 +48,7 @@ def get_info_json(api_key,input_image_path):
             print("❌ 图片转换失败")
             return "", ""
 
+        stream_start_time = time.time()
         response = client.chat.completions.create(
             model=config_manager.get("model_name"),
             messages=[
@@ -79,10 +81,14 @@ def get_info_json(api_key,input_image_path):
                     complete_message += chunk_message
             except Exception:
                 continue
+        stream_elapsed = time.time() - stream_start_time
+        print(f"⏱️ 提取姓名考号（流式）耗时: {stream_elapsed:.3f}s")
+        print(f"🧾 模型响应（流式）: {repr(complete_message)}")
         if complete_message:
             stu_name, stu_number = parse_str(complete_message)
             return stu_name, stu_number
 
+        non_stream_start_time = time.time()
         response = client.chat.completions.create(
             model=config_manager.get("model_name"),
             messages=[
@@ -103,7 +109,10 @@ def get_info_json(api_key,input_image_path):
                 }],
             stream=False
         )
+        non_stream_elapsed = time.time() - non_stream_start_time
         message = response.choices[0].message.content if response and response.choices else ""
+        print(f"⏱️ 提取姓名考号（非流式）耗时: {non_stream_elapsed:.3f}s")
+        print(f"🧾 模型响应（非流式）: {repr(message)}")
         stu_name, stu_number = parse_str(message)
         return stu_name, stu_number
     except APIConnectionError as e:
