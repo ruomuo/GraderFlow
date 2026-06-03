@@ -163,8 +163,8 @@ if __name__ == "__main__":
     # 测试函数
     print("应用程序根目录:", get_app_root_dir())
     print("配置文件目录:", get_config_dir())
-    print("客观题答案文件路径:", get_config_file_path('answer_multiple.txt'))
-    print("主观题答案文件路径:", get_config_file_path('test_subjective_answer.txt'))
+    print("客观题答案文件路径:", get_config_file_path('objective_answer.txt'))
+    print("主观题答案文件路径:", get_config_file_path('subjective_answer.txt'))
     print("问题类型文件路径:", get_config_file_path('question_types.txt'))
     print("是否为打包环境:", getattr(sys, 'frozen', False))
     if hasattr(sys, '_MEIPASS'):

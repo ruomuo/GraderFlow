@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QProgressBar, QSplitter, QFrame, QGridLayout,
                                QGroupBox, QDialog, QTabWidget, QLineEdit, QFormLayout,
                                QTextEdit, QMessageBox, QComboBox, QSpinBox, 
-                               QDoubleSpinBox, QListWidget, QCheckBox)
+                               QDoubleSpinBox, QListWidget, QCheckBox, QStackedWidget)
 from PySide6.QtCore import Qt, Signal, QSize, QEvent
 from PySide6.QtGui import QPixmap, QFont, QIcon, QColor
 import pandas as pd
@@ -461,6 +461,13 @@ class SystemConfigDialog(QDialog):
         
         api_layout.addRow("模型选择:", self.model_combo)
 
+        api_test_layout = QHBoxLayout()
+        self.test_api_button = QPushButton("测试连接")
+        self.test_api_button.clicked.connect(self.test_api_connection)
+        api_test_layout.addWidget(self.test_api_button)
+        api_test_layout.addStretch()
+        api_layout.addRow("", api_test_layout)
+
         self._setup_api_edit_fields()
 
         # 识别配置选项卡
@@ -546,6 +553,18 @@ class SystemConfigDialog(QDialog):
 
         # 加载现有配置
         self.load_current_config()
+
+    def _parse_objective_answer_file(self, file_path: str) -> dict:
+        from core.omr.question_parser import parse_multiple_choice_answers
+        answers, scores, options = parse_multiple_choice_answers(file_path)
+        answer_dict = {}
+        for q_num, answer in answers.items():
+            answer_dict[q_num] = {
+                'answer': answer,
+                'score': scores.get(q_num, 1.0),
+                'options': options.get(q_num, 4)
+            }
+        return answer_dict
     
     def add_questions(self):
         """添加题目到配置"""
@@ -778,7 +797,7 @@ class SystemConfigDialog(QDialog):
         
         try:
             # 使用主窗口的解析方法
-            answer_dict = self.parent().parse_answer_txt(path)
+            answer_dict = self._parse_objective_answer_file(path)
             
             # 转换为新的格式
             for q_num, q_data in answer_dict.items():
@@ -982,7 +1001,7 @@ class SystemConfigDialog(QDialog):
         
         path, _ = QFileDialog.getSaveFileName(
             self, '保存主观题答案文件',
-            'subjective_answers.txt', '文本文件 (*.txt)'
+            'subjective_answer.txt', '文本文件 (*.txt)'
         )
         if not path:
             return
@@ -1043,8 +1062,62 @@ class SystemConfigDialog(QDialog):
                 obj.selectAll()
                 return True
         return super().eventFilter(obj, event)
+
+    def _get_api_settings_from_inputs(self):
+        """从界面控件中提取当前 API 配置"""
+        api_key_text = self.api_key_input.text().strip()
+        original_api_key = self.api_key_input.property("original_api_key")
+        if "***" in api_key_text and original_api_key:
+            api_key = str(original_api_key).strip()
+        else:
+            api_key = api_key_text
+
+        return {
+            "api_key": api_key,
+            "api_base_url": self.api_base_url_input.text().strip(),
+            "model_name": self.model_combo.currentText().strip(),
+        }
+
+    def refresh_from_config(self, config, reload_answer_files=False):
+        """使用最新配置刷新界面显示"""
+        self.current_config = config or {}
+        self.load_current_config(reload_answer_files=reload_answer_files)
+
+    def test_api_connection(self):
+        """测试当前 API 配置是否可用"""
+        api_settings = self._get_api_settings_from_inputs()
+        api_key = api_settings["api_key"]
+        base_url = api_settings["api_base_url"]
+        model_name = api_settings["model_name"]
+
+        if not api_key:
+            QMessageBox.warning(self, "提示", "请先输入 API 密钥。")
+            return
+        if not base_url:
+            QMessageBox.warning(self, "提示", "请先输入 API 地址。")
+            return
+        if not model_name:
+            QMessageBox.warning(self, "提示", "请先选择或输入模型名称。")
+            return
+
+        try:
+            from openai import OpenAI
+
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            client = OpenAI(api_key=api_key, base_url=base_url, timeout=15.0)
+            client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=1,
+                temperature=0,
+            )
+            QMessageBox.information(self, "测试成功", "API 密钥、API 地址和模型配置可正常使用。")
+        except Exception as e:
+            QMessageBox.critical(self, "测试失败", f"当前 API 配置不可用：{str(e)}")
+        finally:
+            QApplication.restoreOverrideCursor()
     
-    def load_current_config(self):
+    def load_current_config(self, reload_answer_files=True):
         """加载当前配置到界面"""
         # 加载API配置
         if self.current_config.get("api_key"):
@@ -1057,15 +1130,27 @@ class SystemConfigDialog(QDialog):
             self.api_key_input.setText(masked_key)
             # 保存原始密钥到属性中
             self.api_key_input.setProperty("original_api_key", api_key)
+        else:
+            self.api_key_input.clear()
+            self.api_key_input.setProperty("original_api_key", "")
         
         if self.current_config.get("api_base_url"):
             self.api_base_url_input.setText(self.current_config["api_base_url"])
+        else:
+            self.api_base_url_input.setText("https://api.siliconflow.cn/v1")
         
         if self.current_config.get("model_name"):
             # 设置模型选择
-            index = self.model_combo.findText(self.current_config["model_name"])
+            current_model_name = self.current_config["model_name"]
+            index = self.model_combo.findText(current_model_name)
+            if index < 0 and current_model_name:
+                self.model_combo.addItem(current_model_name)
+                index = self.model_combo.findText(current_model_name)
             if index >= 0:
                 self.model_combo.setCurrentIndex(index)
+
+        if not reload_answer_files:
+            return
         
         # 加载客观题配置（从配置文件重新读取）
         try:
@@ -1079,7 +1164,7 @@ class SystemConfigDialog(QDialog):
                 from core.omr.question_parser import parse_multiple_choice_answers
                 answers, scores, options = parse_multiple_choice_answers(objective_path)
                 
-                print(f"成功解析配置文件，找到 {len(answers)} 道题目")
+                print(f"成功解析客观题配置文件，找到 {len(answers)} 道题目")
                 
                 # 清空现有配置
                 self.objective_questions.clear()
@@ -1279,7 +1364,7 @@ class SystemConfigDialog(QDialog):
         self.objective_file_path.setText(path)
         try:
             # 使用主窗口的解析方法
-            answer_dict = self.parent().parse_answer_txt(path)
+            answer_dict = self._parse_objective_answer_file(path)
             self.current_config["objective_answer"] = answer_dict
             self.objective_preview.setText(self.format_answer_preview(answer_dict))
             # 保存文件路径到主窗口，以便后续保存到配置管理器
@@ -1293,7 +1378,7 @@ class SystemConfigDialog(QDialog):
             if self.objective_questions:
                 # 生成客观题答案文件
                 from utils.path_utils import get_config_file_path, ensure_dir_exists
-                objective_path = get_config_file_path('answer_multiple.txt')
+                objective_path = get_config_file_path('objective_answer.txt')
                 ensure_dir_exists(objective_path)
                 
                 with open(objective_path, 'w', encoding='utf-8') as f:
@@ -1316,14 +1401,14 @@ class SystemConfigDialog(QDialog):
                 # 更新配置文件路径到配置管理器（使用相对路径）
                 from utils.config_manager import config_manager
                 config_manager.update({
-                    'objective_answer_path': 'answer_config\\answer_multiple.txt'
+                    'objective_answer_path': 'config\\answer_config\\objective_answer.txt'
                 })
                 
                 # 更新当前配置：保存的文件路径与解析后的客观题答案字典
                 self.current_config['objective_answer_file'] = objective_path
                 try:
                     # 解析刚保存的文件，确保传入评分流程的是最新一致的字典结构
-                    self.current_config['objective_answer'] = self.parent().parse_answer_txt(objective_path)
+                    self.current_config['objective_answer'] = self._parse_objective_answer_file(objective_path)
                     # 同步答案文件路径，供主窗口传递给 omr_processor 使用
                     self.current_config['answer_config_file'] = objective_path
                 except Exception as e:
@@ -1331,7 +1416,7 @@ class SystemConfigDialog(QDialog):
             
             # 保存主观题配置
             if self.subjective_questions:
-                subjective_path = get_config_file_path('test_subjective_answer.txt')
+                subjective_path = get_config_file_path('subjective_answer.txt')
                 ensure_dir_exists(subjective_path)
                 
                 with open(subjective_path, 'w', encoding='utf-8') as f:
@@ -1349,7 +1434,7 @@ class SystemConfigDialog(QDialog):
                 # 更新配置文件路径到配置管理器（使用相对路径）
                 from utils.config_manager import config_manager
                 config_manager.update({
-                    'subjective_answer_path': 'answer_config\\test_subjective_answer.txt'
+                    'subjective_answer_path': 'config\\answer_config\\subjective_answer.txt'
                 })
                 
                 # 更新当前配置
@@ -1485,7 +1570,12 @@ class SystemConfigDialog(QDialog):
             self.config_saved.emit(self.current_config)
             
             QMessageBox.information(self, "保存成功", "配置已保存")
-            self.accept()
+            # 作为主界面嵌入组件时，不应关闭；仅在独立弹窗模式下关闭
+            if self.isWindow():
+                self.accept()
+            else:
+                self.setVisible(True)
+                self.raise_()
             
         except Exception as e:
             QMessageBox.critical(self, "保存错误", f"配置保存失败：{str(e)}")
@@ -1508,7 +1598,10 @@ class OMRGUI(QMainWindow):
             "objective_answer": {},
             "subjective_answer": {},
             "question_types": {},
-            "api_key": "",  # 默认API密钥
+            "api_key": config_manager.get_api_key(),
+            "api_base_url": config_manager.get("api_base_url", "https://api.siliconflow.cn/v1"),
+            "model_name": config_manager.get("model_name", "Qwen/Qwen3-VL-30B-A3B-Instruct"),
+            "available_models": config_manager.get("available_models", []),
             "answer_config_file": ""  # 答案配置文件路径
         }
         
@@ -1524,6 +1617,7 @@ class OMRGUI(QMainWindow):
         self.enable_subjective = True  # 默认开启主观题评分
         self.enable_objective = True  # 默认开启客观题阅卷
         self.enable_student_info = True  # 默认开启学生信息识别
+        self.enable_barcode = False  # 默认关闭条形码识别
         
         self.smart_agent_dialog = None # 智能助手对话框实例
 
@@ -1545,123 +1639,66 @@ class OMRGUI(QMainWindow):
         self.setWindowTitle('智能答题卡批改系统')
         self.setGeometry(100, 100, 1280, 720)
 
-        # 创建主窗口部件
         main_widget = QWidget()
         main_layout = QVBoxLayout(main_widget)
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(10)
         self.setCentralWidget(main_widget)
 
-        # 顶部标题
-        title_label = QLabel('🎯 智能答题卡批改系统')
+        title_label = QLabel('智能答题卡批改系统')
         title_label.setAlignment(Qt.AlignCenter)
         title_label.setFont(QFont('Microsoft YaHei', 20, QFont.Bold))
         title_label.setStyleSheet("""
-            color: #2C3E50; 
-            margin-bottom: 15px;
-            padding: 15px;
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 #4A90E2, stop:0.5 #50C878, stop:1 #4A90E2);
-            border-radius: 10px;
+            color: #1E293B; 
+            margin-bottom: 8px;
+            padding: 10px 14px;
+            background: #FFFFFF;
+            border: 1px solid #E8EDF5;
+            border-radius: 12px;
             font-weight: 700;
         """)
         main_layout.addWidget(title_label)
 
-        # 创建分割器
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.setChildrenCollapsible(False)
-        main_layout.addWidget(splitter, 1)
+        content_layout = QHBoxLayout()
+        content_layout.setSpacing(10)
+        main_layout.addLayout(content_layout, 1)
 
-        # 左侧图像显示区域
-        left_widget = QWidget()
-        left_layout = QVBoxLayout(left_widget)
-        left_layout.setContentsMargins(0, 0, 0, 0)
+        nav_widget = QWidget()
+        nav_widget.setFixedWidth(178)
+        nav_layout = QVBoxLayout(nav_widget)
+        nav_layout.setContentsMargins(0, 4, 0, 4)
+        nav_layout.setSpacing(6)
 
-        # 图像显示框
-        image_group = QGroupBox("答题卡预览")
-        image_layout = QVBoxLayout(image_group)
-        
-        self.image_label = QLabel('📷 请选择图片或文件夹')
-        self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setMinimumSize(500, 400)
-        self.image_label.setStyleSheet("""
-            border: 2px dashed #4A90E2; 
-            border-radius: 10px; 
-            background-color: #F8F9FA; 
-            padding: 20px;
-            color: #6C757D;
-            font-size: 16px;
-            font-weight: 500;
-        """)
-        image_layout.addWidget(self.image_label)
-        
-        # 进度条
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setTextVisible(True)
-        self.progress_bar.setFormat("📊 %v/%m (%p%)")
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                border: 2px solid #E1E8ED; 
-                border-radius: 8px; 
-                text-align: center;
-                font-weight: 600;
-                font-size: 13px;
-                background-color: #F8F9FA;
-                color: #495057;
-                min-height: 25px;
-            }
-            QProgressBar::chunk {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #4A90E2, stop:1 #50C878);
-                border-radius: 6px;
-            }
-        """)
-        image_layout.addWidget(self.progress_bar)
-        
-        # 状态标签
-        self.status_label = QLabel('✨ 准备就绪')
-        self.status_label.setAlignment(Qt.AlignCenter)
-        self.status_label.setStyleSheet("""
-            color: #6C757D; 
-            margin-top: 10px;
-            font-size: 14px;
-            font-weight: 500;
-            padding: 5px;
-        """)
-        image_layout.addWidget(self.status_label)
-        
-        left_layout.addWidget(image_group)
-        
-        # 右侧控制面板
-        right_widget = QWidget()
-        right_layout = QVBoxLayout(right_widget)
-        right_layout.setContentsMargins(0, 0, 0, 0)
+        self.btn_nav_marking = QPushButton("🧾  阅卷中心")
+        self.btn_nav_trace = QPushButton("🖼️  阅卷痕迹")
+        self.btn_nav_reports = QPushButton("📄  阅卷报告")
+        self.btn_nav_stats = QPushButton("📊  数据统计")
+        self.btn_nav_settings = QPushButton("⚙️  参数设置")
+        self.btn_toggle_assistant = QPushButton("🤖 隐藏助手")
+        for nav_btn in [self.btn_nav_marking, self.btn_nav_trace, self.btn_nav_reports, self.btn_nav_stats, self.btn_nav_settings, self.btn_toggle_assistant]:
+            nav_btn.setMinimumHeight(40)
+            nav_btn.setCursor(Qt.PointingHandCursor)
+            nav_btn.setStyleSheet("text-align: left; padding-left: 12px; border-radius: 10px; font-size: 13px; font-weight: 600;")
+            nav_layout.addWidget(nav_btn)
+        nav_layout.addStretch()
+        content_layout.addWidget(nav_widget)
 
-        # 操作按钮组
-        control_group = QGroupBox("操作面板")
-        control_layout = QGridLayout(control_group)
-        
-        # 现代简约风格按钮样式
         primary_button_style = """
             QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #4A90E2, stop:1 #3A7BC8);
+                background: #2563EB;
                 color: white;
                 border: none;
                 border-radius: 8px;
-                padding: 12px 20px;
+                padding: 8px 12px;
                 font-weight: 600;
-                font-size: 14px;
-                min-height: 20px;
+                font-size: 12px;
+                min-height: 16px;
             }
             QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #5BA0F2, stop:1 #4A90E2);
+                background: #1D4ED8;
             }
             QPushButton:pressed {
-                background: #3A7BC8;
+                background: #1E40AF;
             }
             QPushButton:disabled {
                 background-color: #BDC3C7;
@@ -1671,22 +1708,20 @@ class OMRGUI(QMainWindow):
         
         secondary_button_style = """
             QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #50C878, stop:1 #45B369);
-                color: white;
-                border: none;
+                background: #FFFFFF;
+                color: #334155;
+                border: 1px solid #CBD5E1;
                 border-radius: 8px;
-                padding: 12px 20px;
+                padding: 8px 12px;
                 font-weight: 600;
-                font-size: 14px;
-                min-height: 20px;
+                font-size: 12px;
+                min-height: 16px;
             }
             QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #60D888, stop:1 #50C878);
+                background: #F8FAFC;
             }
             QPushButton:pressed {
-                background: #45B369;
+                background: #E2E8F0;
             }
         """
         
@@ -1697,10 +1732,10 @@ class OMRGUI(QMainWindow):
                 color: white;
                 border: none;
                 border-radius: 8px;
-                padding: 12px 20px;
+                padding: 8px 12px;
                 font-weight: 600;
-                font-size: 14px;
-                min-height: 20px;
+                font-size: 12px;
+                min-height: 16px;
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -1713,22 +1748,20 @@ class OMRGUI(QMainWindow):
         
         warning_button_style = """
             QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #FFB347, stop:1 #E6A23C);
-                color: white;
-                border: none;
+                background: #FFFFFF;
+                color: #334155;
+                border: 1px solid #CBD5E1;
                 border-radius: 8px;
-                padding: 12px 20px;
+                padding: 8px 12px;
                 font-weight: 600;
-                font-size: 14px;
-                min-height: 20px;
+                font-size: 12px;
+                min-height: 16px;
             }
             QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #FFC357, stop:1 #FFB347);
+                background: #F8FAFC;
             }
             QPushButton:pressed {
-                background: #E6A23C;
+                background: #E2E8F0;
             }
         """
         
@@ -1739,10 +1772,10 @@ class OMRGUI(QMainWindow):
                 color: white;
                 border: none;
                 border-radius: 8px;
-                padding: 12px 20px;
+                padding: 8px 12px;
                 font-weight: 600;
-                font-size: 14px;
-                min-height: 20px;
+                font-size: 12px;
+                min-height: 16px;
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -1752,91 +1785,551 @@ class OMRGUI(QMainWindow):
                 background: #7F8C8D;
             }
         """
-        
+
+        self.chk_objective = QCheckBox('阅卷客观题')
+        self.chk_subjective = QCheckBox('阅卷主观题')
+        self.chk_student_info = QCheckBox('识别学生信息')
+        self.chk_barcode = QCheckBox('识别条形码')
+        self.lbl_objective_state = QLabel()
+        self.lbl_subjective_state = QLabel()
+        self.lbl_student_info_state = QLabel()
+        self.lbl_barcode_state = QLabel()
+        for state_label in [self.lbl_objective_state, self.lbl_subjective_state, self.lbl_student_info_state, self.lbl_barcode_state]:
+            state_label.setAlignment(Qt.AlignCenter)
+            state_label.setMinimumWidth(36)
+        self.chk_objective.setChecked(self.enable_objective)
+        self.chk_subjective.setChecked(self.enable_subjective)
+        self.chk_student_info.setChecked(self.enable_student_info)
+        self.chk_barcode.setChecked(self.enable_barcode)
+
         self.btn_file = QPushButton('📁 选择单个文件')
-        self.btn_file.setStyleSheet(primary_button_style)
-        
+        self.btn_file.setStyleSheet(secondary_button_style)
         self.btn_batch = QPushButton('📂 选择批量处理文件夹')
-        self.btn_batch.setStyleSheet(primary_button_style)
-        
-        self.btn_answer = QPushButton('⚙️ 系统配置')
-        self.btn_answer.setStyleSheet(primary_button_style)
-        
-        self.btn_smart_agent = QPushButton('🤖 智能助手')
-        self.btn_smart_agent.setStyleSheet(primary_button_style)
-        
-        # 已移除：A/B模式切换按钮（识别模式仅在系统配置中设定）
-        
-        # 主观题评分开关按钮
-        self.btn_subjective_toggle = QPushButton('✅ 主观题: 开启')
-        self.btn_subjective_toggle.setStyleSheet(secondary_button_style)
-        self.btn_subjective_toggle.setToolTip('点击切换主观题评分开关\n开启: 启用主观题评分\n关闭: 仅评分客观题')
-        
-        # 客观题阅卷开关按钮
-        self.btn_objective_toggle = QPushButton('✅ 客观题: 开启')
-        self.btn_objective_toggle.setStyleSheet(secondary_button_style)
-        self.btn_objective_toggle.setToolTip('点击切换客观题阅卷开关\n开启: 启用客观题阅卷\n关闭: 仅评分主观题')
-        
-        # 学生信息识别开关按钮
-        self.btn_student_info_toggle = QPushButton('✅ 学生信息: 开启')
-        self.btn_student_info_toggle.setStyleSheet(secondary_button_style)
-        self.btn_student_info_toggle.setToolTip('点击切换学生信息识别开关\n开启: 启用学生信息识别\n关闭: 跳过学生信息识别')
-        
+        self.btn_batch.setStyleSheet(secondary_button_style)
         self.btn_recognition = QPushButton('🚀 开始识别')
         self.btn_recognition.setStyleSheet(secondary_button_style)
-        
         self.btn_export = QPushButton('📊 导出成绩')
         self.btn_export.setStyleSheet(warning_button_style)
-        
-        # 保存样式供切换时使用
+        for action_btn in [self.btn_file, self.btn_batch, self.btn_recognition, self.btn_export]:
+            action_btn.setMinimumHeight(32)
+
         self.primary_style = primary_button_style
         self.secondary_style = secondary_button_style
         self.accent_style = accent_button_style
         self.warning_style = warning_button_style
         self.toggle_off_style = toggle_off_style
-        
-        control_layout.addWidget(self.btn_file, 0, 0)
-        control_layout.addWidget(self.btn_batch, 0, 1)
-        control_layout.addWidget(self.btn_answer, 1, 0)
-        control_layout.addWidget(self.btn_smart_agent, 1, 1)
-        
-        # 开关按钮（识别模式按钮已移除，改由系统配置设定）
-        control_layout.addWidget(self.btn_objective_toggle, 3, 0)
-        control_layout.addWidget(self.btn_subjective_toggle, 3, 1)
-        control_layout.addWidget(self.btn_student_info_toggle, 4, 0, 1, 2)
-        
-        control_layout.addWidget(self.btn_recognition, 5, 0, 1, 2)
-        control_layout.addWidget(self.btn_export, 6, 0, 1, 2)
-        
-        right_layout.addWidget(control_group)
+        self.nav_active_style = """
+            QPushButton {
+                background-color: #1E66F5;
+                color: white;
+                border: none;
+                border-radius: 10px;
+                text-align: left;
+                padding-left: 12px;
+                font-size: 13px;
+                font-weight: 700;
+            }
+        """
+        self.nav_inactive_style = """
+            QPushButton {
+                background-color: #FFFFFF;
+                color: #334155;
+                border: 1px solid #E2E8F0;
+                border-radius: 10px;
+                text-align: left;
+                padding-left: 12px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #F1F5F9;
+            }
+        """
+        for nav_btn in [self.btn_nav_marking, self.btn_nav_trace, self.btn_nav_reports, self.btn_nav_stats, self.btn_nav_settings, self.btn_toggle_assistant]:
+            nav_btn.setStyleSheet(self.nav_inactive_style)
 
-        # 结果表格
-        table_group = QGroupBox("识别结果")
+        self.main_stack = QStackedWidget()
+        content_layout.addWidget(self.main_stack, 1)
+
+        marking_page = QWidget()
+        marking_layout = QVBoxLayout(marking_page)
+        marking_layout.setContentsMargins(0, 0, 0, 0)
+
+        control_group = QGroupBox("阅卷配置")
+        control_layout = QGridLayout(control_group)
+        control_layout.setHorizontalSpacing(10)
+        control_layout.setVerticalSpacing(8)
+        buttons_row = QHBoxLayout()
+        buttons_row.setSpacing(10)
+        buttons_row.addWidget(self.btn_file)
+        buttons_row.addWidget(self.btn_batch)
+        buttons_row.addWidget(self.btn_recognition)
+        buttons_row.addWidget(self.btn_export)
+        control_layout.addLayout(buttons_row, 0, 0, 1, 2)
+        flags_row = QHBoxLayout()
+        flags_row.setSpacing(18)
+        flags_row.addWidget(self._create_flag_item(self.chk_objective, self.lbl_objective_state))
+        flags_row.addWidget(self._create_flag_item(self.chk_subjective, self.lbl_subjective_state))
+        flags_row.addWidget(self._create_flag_item(self.chk_student_info, self.lbl_student_info_state))
+        flags_row.addWidget(self._create_flag_item(self.chk_barcode, self.lbl_barcode_state))
+        flags_row.addStretch()
+        control_layout.addLayout(flags_row, 1, 0, 1, 2)
+        marking_layout.addWidget(control_group)
+
+        selection_group = QGroupBox("已选择源")
+        selection_layout = QVBoxLayout(selection_group)
+        self.selected_source_label = QLabel("未选择文件或文件夹")
+        self.selected_items_list = QListWidget()
+        selection_layout.addWidget(self.selected_source_label)
+        selection_layout.addWidget(self.selected_items_list)
+        marking_layout.addWidget(selection_group)
+
+        marking_splitter = QSplitter(Qt.Horizontal)
+        preview_group = QGroupBox("答题卡预览")
+        preview_layout = QVBoxLayout(preview_group)
+        self.image_label = QLabel('📷 请选择图片或文件夹')
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setMinimumSize(500, 320)
+        self.image_label.setStyleSheet("""
+            border: 2px dashed #4A90E2; 
+            border-radius: 10px; 
+            background-color: #F8F9FA; 
+            padding: 20px;
+            color: #6C757D;
+            font-size: 16px;
+            font-weight: 500;
+        """)
+        preview_layout.addWidget(self.image_label)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("📊 %v/%m (%p%)")
+        preview_layout.addWidget(self.progress_bar)
+        self.status_label = QLabel('✨ 准备就绪')
+        self.status_label.setAlignment(Qt.AlignCenter)
+        preview_layout.addWidget(self.status_label)
+        marking_splitter.addWidget(preview_group)
+
+        table_group = QGroupBox("识别结果与联动预览")
         table_layout = QVBoxLayout(table_group)
-        
         self.result_table = self.create_result_table()
-        table_layout.addWidget(self.result_table)
-        
-        right_layout.addWidget(table_group, 1)  # 表格占据更多空间
+        table_layout.addWidget(self.result_table, 3)
+        linked_group = QGroupBox("报告与阅卷痕迹联动")
+        linked_layout = QHBoxLayout(linked_group)
+        self.linked_files_list = QListWidget()
+        self.linked_files_list.setMinimumWidth(220)
+        self.linked_preview_tabs = QTabWidget()
+        self.linked_preview_text = QTextEdit()
+        self.linked_preview_text.setReadOnly(True)
+        self.linked_preview_text.setPlaceholderText("选择结果行后，将展示匹配到的报告内容或阅卷痕迹文件")
+        self.linked_preview_image = QLabel("暂无图片预览")
+        self.linked_preview_image.setAlignment(Qt.AlignCenter)
+        self.linked_preview_image.setMinimumHeight(180)
+        self.linked_preview_tabs.addTab(self.linked_preview_text, "文本预览")
+        self.linked_preview_tabs.addTab(self.linked_preview_image, "图片预览")
+        linked_layout.addWidget(self.linked_files_list, 1)
+        linked_layout.addWidget(self.linked_preview_tabs, 2)
+        table_layout.addWidget(linked_group, 2)
+        marking_splitter.addWidget(table_group)
+        marking_splitter.setSizes([int(self.width() * 0.55), int(self.width() * 0.45)])
+        marking_layout.addWidget(marking_splitter, 1)
 
-        # 添加到分割器
-        splitter.addWidget(left_widget)
-        splitter.addWidget(right_widget)
-        splitter.setSizes([int(self.width() * 0.6), int(self.width() * 0.4)])
+        trace_page = QWidget()
+        trace_layout = QVBoxLayout(trace_page)
+        trace_top = QHBoxLayout()
+        self.trace_summary_label = QLabel("read 目录痕迹文件")
+        self.btn_refresh_trace = QPushButton("🔄 刷新痕迹")
+        self.btn_refresh_trace.setStyleSheet(primary_button_style)
+        trace_top.addWidget(self.trace_summary_label, 1)
+        trace_top.addWidget(self.btn_refresh_trace)
+        trace_layout.addLayout(trace_top)
+        trace_splitter = QSplitter(Qt.Horizontal)
+        self.trace_table = QTableWidget()
+        self.trace_table.setColumnCount(4)
+        self.trace_table.setHorizontalHeaderLabels(["文件名", "大小(KB)", "修改时间", "路径"])
+        self.trace_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        trace_splitter.addWidget(self.trace_table)
+        trace_preview_group = QGroupBox("痕迹预览")
+        trace_preview_layout = QVBoxLayout(trace_preview_group)
+        self.trace_preview_tabs = QTabWidget()
+        self.trace_preview_text = QTextEdit()
+        self.trace_preview_text.setReadOnly(True)
+        self.trace_preview_image = QLabel("暂无图片预览")
+        self.trace_preview_image.setAlignment(Qt.AlignCenter)
+        self.trace_preview_tabs.addTab(self.trace_preview_text, "文本预览")
+        self.trace_preview_tabs.addTab(self.trace_preview_image, "图片预览")
+        trace_preview_layout.addWidget(self.trace_preview_tabs)
+        trace_splitter.addWidget(trace_preview_group)
+        trace_splitter.setSizes([int(self.width() * 0.62), int(self.width() * 0.38)])
+        trace_layout.addWidget(trace_splitter, 1)
 
-        # 底部状态栏
+        reports_page = QWidget()
+        reports_layout = QVBoxLayout(reports_page)
+        reports_top = QHBoxLayout()
+        self.reports_summary_label = QLabel("reports 目录报告文件")
+        self.btn_refresh_reports = QPushButton("🔄 刷新报告")
+        self.btn_refresh_reports.setStyleSheet(primary_button_style)
+        reports_top.addWidget(self.reports_summary_label, 1)
+        reports_top.addWidget(self.btn_refresh_reports)
+        reports_layout.addLayout(reports_top)
+        reports_splitter = QSplitter(Qt.Horizontal)
+        self.reports_only_table = QTableWidget()
+        self.reports_only_table.setColumnCount(4)
+        self.reports_only_table.setHorizontalHeaderLabels(["文件名", "大小(KB)", "修改时间", "路径"])
+        self.reports_only_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        reports_splitter.addWidget(self.reports_only_table)
+        reports_preview_group = QGroupBox("报告预览")
+        reports_preview_layout = QVBoxLayout(reports_preview_group)
+        self.reports_preview_tabs = QTabWidget()
+        self.reports_preview_text = QTextEdit()
+        self.reports_preview_text.setReadOnly(True)
+        self.reports_preview_image = QLabel("暂无图片预览")
+        self.reports_preview_image.setAlignment(Qt.AlignCenter)
+        self.reports_preview_tabs.addTab(self.reports_preview_text, "文本预览")
+        self.reports_preview_tabs.addTab(self.reports_preview_image, "图片预览")
+        reports_preview_layout.addWidget(self.reports_preview_tabs)
+        reports_splitter.addWidget(reports_preview_group)
+        reports_splitter.setSizes([int(self.width() * 0.62), int(self.width() * 0.38)])
+        reports_layout.addWidget(reports_splitter, 1)
+
+        stats_page = QWidget()
+        stats_layout = QVBoxLayout(stats_page)
+        stats_cards_layout = QHBoxLayout()
+        self.stat_card_read_count = QLabel("0")
+        self.stat_card_reports_count = QLabel("0")
+        self.stat_card_total_size = QLabel("0 MB")
+        self.stat_bar_read = QProgressBar()
+        self.stat_bar_reports = QProgressBar()
+        self.stat_bar_size = QProgressBar()
+        for title, value_label, progress_bar in [
+            ("read 文件数", self.stat_card_read_count, self.stat_bar_read),
+            ("reports 文件数", self.stat_card_reports_count, self.stat_bar_reports),
+            ("总文件体积", self.stat_card_total_size, self.stat_bar_size),
+        ]:
+            card = QGroupBox(title)
+            card_layout = QVBoxLayout(card)
+            value_label.setAlignment(Qt.AlignCenter)
+            value_label.setFont(QFont('Microsoft YaHei', 16, QFont.Bold))
+            progress_bar.setRange(0, 100)
+            progress_bar.setValue(0)
+            card_layout.addWidget(value_label)
+            card_layout.addWidget(progress_bar)
+            stats_cards_layout.addWidget(card)
+        stats_layout.addLayout(stats_cards_layout)
+        stats_top_layout = QHBoxLayout()
+        self.stats_summary_label = QLabel("统计加载中...")
+        self.btn_refresh_stats = QPushButton("🔄 刷新统计")
+        self.btn_refresh_stats.setStyleSheet(primary_button_style)
+        stats_top_layout.addWidget(self.stats_summary_label, 1)
+        stats_top_layout.addWidget(self.btn_refresh_stats)
+        stats_layout.addLayout(stats_top_layout)
+        stats_tabs = QTabWidget()
+        self.read_table = QTableWidget()
+        self.read_table.setColumnCount(4)
+        self.read_table.setHorizontalHeaderLabels(["文件名", "大小(KB)", "修改时间", "路径"])
+        self.read_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.reports_table = QTableWidget()
+        self.reports_table.setColumnCount(4)
+        self.reports_table.setHorizontalHeaderLabels(["文件名", "大小(KB)", "修改时间", "路径"])
+        self.reports_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        stats_tabs.addTab(self.read_table, "read 目录")
+        stats_tabs.addTab(self.reports_table, "reports 目录")
+        stats_splitter = QSplitter(Qt.Horizontal)
+        stats_splitter.addWidget(stats_tabs)
+        stats_preview_group = QGroupBox("统计文件预览")
+        stats_preview_layout = QVBoxLayout(stats_preview_group)
+        self.stats_preview_text = QTextEdit()
+        self.stats_preview_text.setReadOnly(True)
+        self.stats_preview_text.setPlaceholderText("点击统计表中的文件可在此预览")
+        self.stats_preview_image = QLabel("暂无图片预览")
+        self.stats_preview_image.setAlignment(Qt.AlignCenter)
+        self.stats_preview_image.setMinimumHeight(220)
+        self.stats_preview_tabs = QTabWidget()
+        self.stats_preview_tabs.addTab(self.stats_preview_text, "文本预览")
+        self.stats_preview_tabs.addTab(self.stats_preview_image, "图片预览")
+        stats_preview_layout.addWidget(self.stats_preview_tabs)
+        stats_splitter.addWidget(stats_preview_group)
+        stats_splitter.setSizes([int(self.width() * 0.65), int(self.width() * 0.35)])
+        stats_layout.addWidget(stats_splitter, 1)
+
+        settings_page = QWidget()
+        settings_layout = QVBoxLayout(settings_page)
+        self.system_config_panel = SystemConfigDialog(self, self.system_config)
+        self.system_config_panel.setWindowFlags(Qt.Widget)
+        self.system_config_panel.config_saved.connect(self.on_config_saved)
+        settings_layout.addWidget(self.system_config_panel)
+
+        self.main_stack.addWidget(marking_page)
+        self.main_stack.addWidget(trace_page)
+        self.main_stack.addWidget(reports_page)
+        self.main_stack.addWidget(stats_page)
+        self.main_stack.addWidget(settings_page)
+
+        self.assistant_panel = QGroupBox("智能助手")
+        self.assistant_panel.setMinimumWidth(360)
+        assistant_layout = QVBoxLayout(self.assistant_panel)
+        assistant_header = QHBoxLayout()
+        self.assistant_state_label = QLabel("右侧助手已启用")
+        self.btn_hide_assistant = QPushButton("隐藏")
+        self.btn_hide_assistant.setStyleSheet(primary_button_style)
+        assistant_header.addWidget(self.assistant_state_label, 1)
+        assistant_header.addWidget(self.btn_hide_assistant)
+        assistant_layout.addLayout(assistant_header)
+        if self.smart_agent_dialog is None:
+            self.smart_agent_dialog = SmartAgentDialog(self)
+            self.smart_agent_dialog.config_applied.connect(self.on_smart_agent_config_applied)
+        self.smart_agent_dialog.setWindowFlags(Qt.Widget)
+        assistant_layout.addWidget(self.smart_agent_dialog, 1)
+        content_layout.addWidget(self.assistant_panel)
+
         self.statusBar().setStyleSheet("background-color: #f5f5f5; color: #2c3e50;")
 
-        # 连接信号
         self.btn_file.clicked.connect(self.load_single_file)
         self.btn_batch.clicked.connect(self.load_batch_folder)
-        self.btn_answer.clicked.connect(self.open_system_config)
-        self.btn_smart_agent.clicked.connect(self.open_smart_agent)
-        self.btn_subjective_toggle.clicked.connect(self.toggle_subjective_grading)
-        self.btn_objective_toggle.clicked.connect(self.toggle_objective_grading)
-        self.btn_student_info_toggle.clicked.connect(self.toggle_student_info_recognition)
+        self.chk_subjective.stateChanged.connect(self.toggle_subjective_grading)
+        self.chk_objective.stateChanged.connect(self.toggle_objective_grading)
+        self.chk_student_info.stateChanged.connect(self.toggle_student_info_recognition)
+        self.chk_barcode.stateChanged.connect(self.toggle_barcode_recognition)
         self.btn_recognition.clicked.connect(self.start_processing)
         self.btn_export.clicked.connect(self.export_data)
+        self.btn_nav_marking.clicked.connect(lambda: self.switch_main_page(0))
+        self.btn_nav_trace.clicked.connect(lambda: self.switch_main_page(1))
+        self.btn_nav_reports.clicked.connect(lambda: self.switch_main_page(2))
+        self.btn_nav_stats.clicked.connect(lambda: self.switch_main_page(3))
+        self.btn_nav_settings.clicked.connect(lambda: self.switch_main_page(4))
+        self.btn_toggle_assistant.clicked.connect(self.toggle_assistant_panel)
+        self.btn_hide_assistant.clicked.connect(self.toggle_assistant_panel)
+        self.btn_refresh_stats.clicked.connect(self.refresh_statistics_view)
+        self.btn_refresh_trace.clicked.connect(self.refresh_trace_view)
+        self.btn_refresh_reports.clicked.connect(self.refresh_reports_view)
+        self.result_table.itemSelectionChanged.connect(self.refresh_linked_preview_for_selected_result)
+        self.linked_files_list.itemSelectionChanged.connect(self.preview_selected_linked_file)
+        self.read_table.itemSelectionChanged.connect(self.preview_selected_stats_file)
+        self.reports_table.itemSelectionChanged.connect(self.preview_selected_stats_file)
+        self.trace_table.itemSelectionChanged.connect(self.preview_selected_trace_file)
+        self.reports_only_table.itemSelectionChanged.connect(self.preview_selected_report_file)
+
+        self.update_switch_status_labels()
+        self.switch_main_page(0)
+        self.refresh_trace_view()
+        self.refresh_reports_view()
+        self.refresh_statistics_view()
+
+    def _create_flag_item(self, checkbox, state_label):
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(checkbox)
+        layout.addWidget(state_label)
+        return container
+
+    def _set_switch_state_label(self, label_widget, enabled):
+        if enabled:
+            label_widget.setText("ON")
+            label_widget.setStyleSheet("color: #166534; background: #DCFCE7; border: 1px solid #86EFAC; border-radius: 6px; padding: 1px 6px; font-size: 11px; font-weight: 600;")
+        else:
+            label_widget.setText("OFF")
+            label_widget.setStyleSheet("color: #64748B; background: #F1F5F9; border: 1px solid #CBD5E1; border-radius: 6px; padding: 1px 6px; font-size: 11px; font-weight: 600;")
+
+    def update_switch_status_labels(self):
+        self._set_switch_state_label(self.lbl_objective_state, self.chk_objective.isChecked())
+        self._set_switch_state_label(self.lbl_subjective_state, self.chk_subjective.isChecked())
+        self._set_switch_state_label(self.lbl_student_info_state, self.chk_student_info.isChecked())
+        self._set_switch_state_label(self.lbl_barcode_state, self.chk_barcode.isChecked())
+
+    def switch_main_page(self, index):
+        self.main_stack.setCurrentIndex(index)
+        nav_buttons = [self.btn_nav_marking, self.btn_nav_trace, self.btn_nav_reports, self.btn_nav_stats, self.btn_nav_settings]
+        for i, button in enumerate(nav_buttons):
+            if i == index:
+                button.setStyleSheet(self.nav_active_style)
+            else:
+                button.setStyleSheet(self.nav_inactive_style)
+
+    def toggle_assistant_panel(self):
+        visible = not self.assistant_panel.isVisible()
+        self.assistant_panel.setVisible(visible)
+        if visible:
+            self.btn_toggle_assistant.setText("🤖 隐藏助手")
+            self.btn_hide_assistant.setText("隐藏")
+            self.assistant_state_label.setText("右侧助手已启用")
+        else:
+            self.btn_toggle_assistant.setText("🤖 显示助手")
+            self.assistant_state_label.setText("右侧助手已隐藏")
+
+    def refresh_statistics_view(self):
+        read_dir = os.path.join(os.getcwd(), "read")
+        reports_dir = os.path.join(os.getcwd(), "reports")
+        read_count, read_size_kb = self._populate_stats_table(self.read_table, read_dir)
+        reports_count, reports_size_kb = self._populate_stats_table(self.reports_table, reports_dir)
+        total_size_kb = read_size_kb + reports_size_kb
+        total_count = max(read_count + reports_count, 1)
+        self.stat_card_read_count.setText(str(read_count))
+        self.stat_card_reports_count.setText(str(reports_count))
+        self.stat_card_total_size.setText(f"{total_size_kb / 1024.0:.2f} MB")
+        self.stat_bar_read.setValue(int(100 * read_count / total_count))
+        self.stat_bar_reports.setValue(int(100 * reports_count / total_count))
+        size_denominator = max(total_size_kb, 1.0)
+        self.stat_bar_size.setValue(int(100 * reports_size_kb / size_denominator))
+        self.stats_summary_label.setText(
+            f"read 文件: {read_count} ({read_size_kb/1024.0:.2f}MB) | "
+            f"reports 文件: {reports_count} ({reports_size_kb/1024.0:.2f}MB)"
+        )
+        self.refresh_trace_view()
+        self.refresh_reports_view()
+    
+    def refresh_trace_view(self):
+        trace_dir = os.path.join(os.getcwd(), "read")
+        trace_count, trace_size_kb = self._populate_stats_table(self.trace_table, trace_dir)
+        self.trace_summary_label.setText(f"痕迹文件: {trace_count} | 体积: {trace_size_kb/1024.0:.2f} MB")
+
+    def refresh_reports_view(self):
+        reports_dir = os.path.join(os.getcwd(), "reports")
+        report_count, report_size_kb = self._populate_stats_table(self.reports_only_table, reports_dir)
+        self.reports_summary_label.setText(f"报告文件: {report_count} | 体积: {report_size_kb/1024.0:.2f} MB")
+
+    def _populate_stats_table(self, table_widget, folder_path):
+        table_widget.setRowCount(0)
+        if not os.path.exists(folder_path):
+            return 0, 0.0
+        file_entries = []
+        total_size_kb = 0.0
+        for root, _, files in os.walk(folder_path):
+            for name in files:
+                full_path = os.path.join(root, name)
+                try:
+                    stat = os.stat(full_path)
+                    size_kb = stat.st_size / 1024.0
+                    modified = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime))
+                    file_entries.append((name, f"{size_kb:.2f}", modified, full_path))
+                    total_size_kb += size_kb
+                except Exception:
+                    continue
+        file_entries.sort(key=lambda x: x[2], reverse=True)
+        for row, entry in enumerate(file_entries):
+            table_widget.insertRow(row)
+            for col, text in enumerate(entry):
+                item = QTableWidgetItem(text)
+                item.setTextAlignment(Qt.AlignCenter if col < 3 else Qt.AlignLeft | Qt.AlignVCenter)
+                if col == 0:
+                    item.setData(Qt.UserRole, entry[3])
+                table_widget.setItem(row, col, item)
+        return len(file_entries), total_size_kb
+
+    def refresh_linked_preview_for_selected_result(self):
+        self.linked_files_list.clear()
+        row = self.result_table.currentRow()
+        if row < 0:
+            return
+        student_id_item = self.result_table.item(row, 0)
+        student_name_item = self.result_table.item(row, 1)
+        student_id = student_id_item.text().strip() if student_id_item else ""
+        student_name = student_name_item.text().strip() if student_name_item else ""
+        source_image_path = student_id_item.data(Qt.UserRole) if student_id_item else ""
+        files = self._find_related_files(student_id, student_name, source_image_path)
+        if not files:
+            self.linked_preview_text.setPlainText("未找到与该学生关联的报告或阅卷痕迹文件")
+            self.linked_preview_image.setText("暂无图片预览")
+            return
+        for path in files:
+            self.linked_files_list.addItem(path)
+        self.linked_files_list.setCurrentRow(0)
+
+    def preview_selected_linked_file(self):
+        if not self.linked_files_list.selectedItems():
+            return
+        selected_path = self.linked_files_list.selectedItems()[0].text()
+        self._preview_file(selected_path, self.linked_preview_text, self.linked_preview_image, self.linked_preview_tabs)
+
+    def preview_selected_stats_file(self):
+        sender_table = self.sender()
+        if sender_table is None:
+            return
+        self._preview_from_table(sender_table, self.stats_preview_text, self.stats_preview_image, self.stats_preview_tabs)
+
+    def preview_selected_trace_file(self):
+        self._preview_from_table(self.trace_table, self.trace_preview_text, self.trace_preview_image, self.trace_preview_tabs)
+
+    def preview_selected_report_file(self):
+        self._preview_from_table(self.reports_only_table, self.reports_preview_text, self.reports_preview_image, self.reports_preview_tabs)
+
+    def _preview_from_table(self, table_widget, text_widget, image_widget, tab_widget):
+        row = table_widget.currentRow()
+        if row < 0:
+            return
+        item = table_widget.item(row, 0)
+        if not item:
+            return
+        full_path = item.data(Qt.UserRole)
+        if not full_path:
+            path_item = table_widget.item(row, 3)
+            full_path = path_item.text() if path_item else ""
+        if full_path:
+            self._preview_file(full_path, text_widget, image_widget, tab_widget)
+
+    def _find_related_files(self, student_id, student_name, source_image_path=""):
+        search_roots = [os.path.join(os.getcwd(), "reports"), os.path.join(os.getcwd(), "read")]
+        keywords = [k.strip() for k in [student_id, student_name] if k and k.strip()]
+        if source_image_path:
+            image_base = os.path.basename(source_image_path)
+            image_stem = os.path.splitext(image_base)[0]
+            keywords.extend([image_base, image_stem])
+            for token in re.split(r"[_\-\s\.]+", image_stem):
+                if token and len(token) >= 2:
+                    keywords.append(token)
+        if self.single_file_path:
+            single_stem = os.path.splitext(os.path.basename(self.single_file_path))[0]
+            keywords.append(single_stem)
+        keywords = list(dict.fromkeys([k.lower() for k in keywords if k]))
+        related_files = []
+        all_files = []
+        for root in search_roots:
+            if not os.path.exists(root):
+                continue
+            for parent, _, files in os.walk(root):
+                for file_name in files:
+                    full_path = os.path.join(parent, file_name)
+                    all_files.append(full_path)
+                    name_lower = file_name.lower()
+                    path_lower = full_path.lower()
+                    matched = any(keyword in name_lower or keyword in path_lower for keyword in keywords)
+                    if matched:
+                        related_files.append(full_path)
+        if not related_files and all_files:
+            related_files = sorted(all_files, key=lambda p: os.path.getmtime(p), reverse=True)[:20]
+        related_files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        return related_files
+
+    def _preview_file(self, file_path, text_widget, image_widget, tab_widget):
+        if not os.path.exists(file_path):
+            text_widget.setPlainText(f"文件不存在: {file_path}")
+            image_widget.setText("暂无图片预览")
+            tab_widget.setCurrentIndex(0)
+            return
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp"]:
+            pixmap = QPixmap(file_path)
+            if pixmap.isNull():
+                image_widget.setText(f"无法加载图片: {file_path}")
+            else:
+                scaled_pixmap = pixmap.scaled(image_widget.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                image_widget.setPixmap(scaled_pixmap)
+            text_widget.setPlainText(file_path)
+            tab_widget.setCurrentIndex(1)
+            return
+        try:
+            with open(file_path, "r", encoding="utf-8") as file_obj:
+                content = file_obj.read(20000)
+            text_widget.setPlainText(content if content else "(空文件)")
+        except UnicodeDecodeError:
+            text_widget.setPlainText(f"该文件为二进制或非UTF-8文本: {file_path}")
+        except Exception as exc:
+            text_widget.setPlainText(f"读取失败: {exc}")
+        image_widget.setPixmap(QPixmap())
+        image_widget.setText("暂无图片预览")
+        tab_widget.setCurrentIndex(0)
 
     def show_activation_dialog(self):
         """显示激活对话框"""
@@ -1854,83 +2347,139 @@ class OMRGUI(QMainWindow):
         self.apply_stylesheet()
 
     def apply_stylesheet(self):
-        # 现代简约风格全局样式
         self.setStyleSheet("""
             QMainWindow, QWidget {
-                background-color: #FAFBFC;
-                color: #2C3E50;
+                background-color: #F5F7FB;
+                color: #1E293B;
                 font-family: 'Segoe UI', 'Microsoft YaHei', Arial, sans-serif;
             }
             QGroupBox {
                 font-weight: 600;
-                font-size: 14px;
-                border: 2px solid #E1E8ED;
-                border-radius: 10px;
-                margin-top: 15px;
-                padding-top: 15px;
+                font-size: 13px;
+                border: 1px solid #E2E8F0;
+                border-radius: 12px;
+                margin-top: 12px;
+                padding-top: 12px;
                 background-color: #FFFFFF;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 15px;
-                padding: 0 8px 0 8px;
-                color: #4A90E2;
-                font-weight: 700;
+                left: 12px;
+                padding: 0 6px 0 6px;
+                color: #3B82F6;
+                font-weight: 600;
             }
             QLabel {
-                color: #2C3E50;
-                font-size: 13px;
+                color: #334155;
+                font-size: 12px;
+            }
+            QCheckBox {
+                color: #334155;
+                font-size: 12px;
+                spacing: 6px;
+                padding: 2px 4px;
+            }
+            QCheckBox::indicator {
+                width: 14px;
+                height: 14px;
+                border: 1px solid #94A3B8;
+                border-radius: 4px;
+                background: #FFFFFF;
+            }
+            QCheckBox::indicator:checked {
+                background: #2563EB;
+                border-color: #2563EB;
+            }
+            QListWidget {
+                background-color: #FFFFFF;
+                border: 1px solid #E2E8F0;
+                border-radius: 10px;
+                padding: 4px;
+                outline: none;
+            }
+            QListWidget::item {
+                padding: 6px 8px;
+                border-radius: 6px;
+                margin: 2px 0px;
+            }
+            QListWidget::item:selected {
+                background-color: #DBEAFE;
+                color: #1E40AF;
             }
             QTableWidget {
-                gridline-color: #E1E8ED;
+                gridline-color: #EEF2F7;
                 background-color: #FFFFFF;
-                alternate-background-color: #F8F9FA;
-                selection-background-color: #4A90E2;
-                selection-color: white;
-                border: 1px solid #E1E8ED;
-                border-radius: 8px;
-                font-size: 13px;
+                alternate-background-color: #F8FAFC;
+                selection-background-color: #DBEAFE;
+                selection-color: #1E3A8A;
+                border: 1px solid #E2E8F0;
+                border-radius: 10px;
+                font-size: 12px;
             }
             QHeaderView::section {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #F8F9FA, stop:1 #E9ECEF);
-                padding: 8px;
-                border: 1px solid #E1E8ED;
+                background: #F8FAFC;
+                padding: 8px 6px;
+                border: 0px;
+                border-bottom: 1px solid #E2E8F0;
                 font-weight: 600;
-                color: #495057;
-                font-size: 13px;
+                color: #475569;
+                font-size: 12px;
             }
             QTableWidget QTableCornerButton::section {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #F8F9FA, stop:1 #E9ECEF);
-                border: 1px solid #E1E8ED;
+                background: #F8FAFC;
+                border: 0px;
+                border-bottom: 1px solid #E2E8F0;
             }
             QProgressBar {
-                border: 2px solid #E1E8ED;
+                border: 1px solid #E2E8F0;
                 border-radius: 8px;
                 text-align: center;
                 font-weight: 600;
-                font-size: 13px;
-                background-color: #F8F9FA;
+                font-size: 11px;
+                background-color: #F8FAFC;
+                color: #475569;
             }
             QProgressBar::chunk {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #4A90E2, stop:1 #50C878);
+                    stop:0 #3B82F6, stop:1 #2563EB);
                 border-radius: 6px;
             }
+            QTabWidget::pane {
+                border: 1px solid #E2E8F0;
+                border-radius: 10px;
+                background: #FFFFFF;
+                top: -1px;
+            }
+            QTabBar::tab {
+                background: #F8FAFC;
+                color: #475569;
+                border: 1px solid #E2E8F0;
+                padding: 6px 10px;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                margin-right: 2px;
+            }
+            QTabBar::tab:selected {
+                background: #FFFFFF;
+                color: #1E40AF;
+                border-bottom-color: #FFFFFF;
+            }
+            QPushButton {
+                border: 1px solid #D9E2F0;
+                border-radius: 8px;
+            }
             QStatusBar {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #FFFFFF, stop:1 #F8F9FA);
-                color: #495057;
-                border-top: 1px solid #E1E8ED;
-                font-size: 13px;
+                background: #FFFFFF;
+                color: #64748B;
+                border-top: 1px solid #E2E8F0;
+                font-size: 12px;
             }
             QSplitter::handle {
-                background-color: #E1E8ED;
+                background-color: #EEF2F7;
                 width: 2px;
             }
             QSplitter::handle:hover {
-                background-color: #4A90E2;
+                background-color: #93C5FD;
             }
         """)
 
@@ -1970,12 +2519,16 @@ class OMRGUI(QMainWindow):
         for col, text in enumerate(items):
             item = QTableWidgetItem(text)
             item.setTextAlignment(Qt.AlignCenter)
+            if col == 0:
+                item.setData(Qt.UserRole, getattr(student, "image_path", "") or "")
             self.result_table.setItem(row, col, item)
 
         self.current_results.append(student)
         
         # 自动滚动到最新行
         self.result_table.scrollToItem(self.result_table.item(row, 0))
+        self.result_table.selectRow(row)
+        self.refresh_linked_preview_for_selected_result()
 
     def load_answer_config(self):
         """加载TXT格式答案配置"""
@@ -2025,13 +2578,6 @@ class OMRGUI(QMainWindow):
             print(f"解析答案文件失败: {e}")
             raise ValueError(f"解析答案文件失败: {e}")
 
-    # 添加系统配置对话框打开方法
-    def open_system_config(self):
-        """打开系统配置对话框"""
-        dialog = SystemConfigDialog(self, self.system_config)
-        dialog.config_saved.connect(self.apply_system_config)
-        dialog.exec()
-
     # 添加应用系统配置的方法
     def apply_system_config(self, config):
         """应用系统配置"""
@@ -2049,6 +2595,7 @@ class OMRGUI(QMainWindow):
 
     def load_single_file(self):
         """加载单个文件"""
+        self.switch_main_page(0)
         self.clear_table()
         path, _ = QFileDialog.getOpenFileName(
             self, '选择答题卡', '',
@@ -2060,6 +2607,9 @@ class OMRGUI(QMainWindow):
             self.batch_folder_path = None  # 清除批量路径
             # 显示图片
             self.display_image(path)
+            self.selected_source_label.setText(f"单文件: {path}")
+            self.selected_items_list.clear()
+            self.selected_items_list.addItem(path)
             self.status_label.setText(f"已选择文件: {os.path.basename(path)}")
             self.status_label.setStyleSheet("color: #3498db; font-weight: bold;")
             self.statusBar().showMessage(f"已选择文件: {path}", 3000)
@@ -2072,6 +2622,7 @@ class OMRGUI(QMainWindow):
 
     def load_batch_folder(self):
         """加载批量处理文件夹"""
+        self.switch_main_page(0)
         self.clear_table()
         folder = QFileDialog.getExistingDirectory(self, '选择批量处理文件夹')
         if folder:
@@ -2085,6 +2636,10 @@ class OMRGUI(QMainWindow):
             
             self.image_label.clear()
             self.image_label.setText(f"已选择文件夹: {folder}\n\n包含 {self.total_files} 个图片文件")
+            self.selected_source_label.setText(f"批量文件夹: {folder}")
+            self.selected_items_list.clear()
+            for file_name in sorted(files):
+                self.selected_items_list.addItem(file_name)
             self.status_label.setText(f"已选择文件夹: {os.path.basename(folder)} ({self.total_files} 个图片)")
             self.status_label.setStyleSheet("color: #3498db; font-weight: bold;")
             self.statusBar().showMessage(f"已选择文件夹: {folder} (包含 {self.total_files} 个图片)", 3000)
@@ -2115,6 +2670,10 @@ class OMRGUI(QMainWindow):
     def process_single_file(self):
         """处理单个文件"""
         try:
+            self.enable_objective = self.chk_objective.isChecked()
+            self.enable_subjective = self.chk_subjective.isChecked()
+            self.enable_student_info = self.chk_student_info.isChecked()
+            self.enable_barcode = self.chk_barcode.isChecked()
             self.status_label.setText(f"正在处理: {os.path.basename(self.single_file_path)}")
             self.status_label.setStyleSheet("color: #e67e22; font-weight: bold;")
             QApplication.processEvents()  # 更新界面
@@ -2128,6 +2687,7 @@ class OMRGUI(QMainWindow):
                 enable_subjective=self.enable_subjective,  # 传递主观题开关
                 enable_objective=self.enable_objective,  # 传递客观题开关
                 enable_student_info=self.enable_student_info,  # 传递学生信息识别开关
+                enable_barcode=self.enable_barcode,  # 传递条形码识别开关
                 answer_config_file=self.system_config.get("answer_config_file"),  # 传递答案配置文件路径
                 subjective_config=self.subjective_questions,  # 传递主观题配置
                 gui_window=self  # 传递GUI窗口实例
@@ -2137,6 +2697,7 @@ class OMRGUI(QMainWindow):
             self.status_label.setText(f"处理完成: {os.path.basename(self.single_file_path)}")
             self.status_label.setStyleSheet("color: #27ae60; font-weight: bold;")
             self.statusBar().showMessage("单个文件处理完成", 3000)
+            self.refresh_statistics_view()
             
             # 更新进度条
             self.progress_bar.setRange(0, 1)
@@ -2149,6 +2710,10 @@ class OMRGUI(QMainWindow):
     def process_batch_files(self):
         """处理批量文件"""
         try:
+            self.enable_objective = self.chk_objective.isChecked()
+            self.enable_subjective = self.chk_subjective.isChecked()
+            self.enable_student_info = self.chk_student_info.isChecked()
+            self.enable_barcode = self.chk_barcode.isChecked()
             self.clear_table()
             extensions = ('.jpg', '.jpeg', '.png')
             files = [f for f in os.listdir(self.batch_folder_path)
@@ -2183,6 +2748,7 @@ class OMRGUI(QMainWindow):
                     enable_subjective=self.enable_subjective,  # 传递主观题开关
                     enable_objective=self.enable_objective,  # 传递客观题开关
                     enable_student_info=self.enable_student_info,  # 传递学生信息识别开关
+                    enable_barcode=self.enable_barcode,  # 传递条形码识别开关
                     answer_config_file=self.system_config.get("answer_config_file"),  # 传递答案配置文件路径
                     subjective_config=self.subjective_questions,  # 传递主观题配置
                     gui_window=self  # 传递GUI窗口实例
@@ -2203,6 +2769,7 @@ class OMRGUI(QMainWindow):
             summary_path = self.save_batch_summary(batch_results)
             if summary_path:
                 self.statusBar().showMessage(f"已生成批量汇总: {summary_path}", 5000)
+            self.refresh_statistics_view()
         except Exception as e:
             self.status_label.setText(f"批量处理失败: {str(e)}")
             self.status_label.setStyleSheet("color: #e74c3c; font-weight: bold;")
@@ -2326,18 +2893,21 @@ class OMRGUI(QMainWindow):
                 
                 # 自动加载API密钥
                 api_key = config_manager.get_api_key()
-                if api_key:
-                    self.system_config["api_key"] = api_key
+                self.system_config["api_key"] = api_key
+                self.system_config["api_base_url"] = config_manager.get("api_base_url", "https://api.siliconflow.cn/v1")
+                self.system_config["model_name"] = config_manager.get("model_name", "Qwen/Qwen3-VL-30B-A3B-Instruct")
+                self.system_config["available_models"] = config_manager.get("available_models", [])
+
+                if self.system_config_panel is not None:
+                    self.system_config_panel.refresh_from_config(self.system_config)
                 
                 # 自动加载学生信息识别开关状态
                 self.enable_student_info = config_manager.is_student_info_enabled()
-                # 更新按钮状态
-                if self.enable_student_info:
-                    self.btn_student_info_toggle.setText("✅ 学生信息: 开启")
-                    self.btn_student_info_toggle.setStyleSheet(self.secondary_style)
-                else:
-                    self.btn_student_info_toggle.setText("❌ 学生信息: 关闭")
-                    self.btn_student_info_toggle.setStyleSheet(self.toggle_off_style)
+                self.enable_barcode = config_manager.get("enable_barcode", False)
+                self.chk_student_info.setChecked(self.enable_student_info)
+                self.chk_barcode.setChecked(self.enable_barcode)
+                self.chk_objective.setChecked(self.enable_objective)
+                self.chk_subjective.setChecked(self.enable_subjective)
 
                 # 自动加载识别模式（A/B）；不再更新主界面按钮，识别模式仅在系统配置中设定
                 try:
@@ -2361,45 +2931,9 @@ class OMRGUI(QMainWindow):
 
     def open_system_config(self):
         """打开系统配置对话框"""
-        # 准备当前配置数据
-        current_config = {
-            "objective_answer": self.system_config.get("objective_answer", {}),
-            "subjective_answer": self.system_config.get("subjective_answer", ""),
-            # 获取原始配置的API Key，不使用get_api_key()以避免显示内置试用Key
-            "api_key": config_manager.get("api_key", ""),
-            "api_base_url": config_manager.get("api_base_url", "https://api.siliconflow.cn/v1"),
-            "model_name": config_manager.get("model_name", "Qwen/Qwen3-VL-30B-A3B-Instruct"),
-            "available_models": config_manager.get("available_models", [
-                "zai-org/GLM-4.6V",
-                "Qwen/Qwen3-VL-8B-Instruct",
-                "Qwen/Qwen3-VL-8B-Thinking",
-                "Qwen/Qwen3-VL-32B-Instruct",
-                "Qwen/Qwen3-VL-32B-Thinking",
-                "Qwen/Qwen3-VL-30B-A3B-Instruct",
-                "Qwen/Qwen3-VL-30B-A3B-Thinking",
-                "Qwen/Qwen3-VL-235B-A22B-Instruct",
-                "Qwen/Qwen3-VL-235B-A22B-Thinking"
-            ])
-        }
-        # 带入当前识别模式
-        current_config["recognition_mode"] = config_manager.get_recognition_mode()
-        
-        # 如果当前配置为空，尝试从配置管理器加载
-        if not current_config["objective_answer"]:
-            objective_path = config_manager.get_objective_answer_path()
-            if objective_path and os.path.exists(objective_path):
-                try:
-                    current_config["objective_answer"] = self.parse_answer_txt(objective_path)
-                except Exception as e:
-                    print(f"加载客观题答案失败: {e}")
-        
-        if not current_config["subjective_answer"]:
-            current_config["subjective_answer"] = config_manager.get_subjective_answer_path()
-        
-        # 打开配置对话框
-        dialog = SystemConfigDialog(self, current_config)
-        dialog.config_saved.connect(self.on_config_saved)
-        dialog.exec()
+        if hasattr(self, "system_config_panel") and self.system_config_panel is not None:
+            self.system_config_panel.show()
+        self.switch_main_page(4)
 
     def on_config_saved(self, config):
         """配置保存后的回调"""
@@ -2420,7 +2954,7 @@ class OMRGUI(QMainWindow):
             
             # 保存客观题答案路径（如果有的话）
             if hasattr(self, '_last_objective_path'):
-                config_updates["objective_answer_path"] = self._last_objective_path
+                config_updates["objective_answer_path"] = "config\\answer_config\\objective_answer.txt"
                 # 同步到系统配置，保持界面和处理流程一致
                 self.system_config["answer_config_file"] = self._last_objective_path
             
@@ -2446,6 +2980,7 @@ class OMRGUI(QMainWindow):
             
             # 保存学生信息识别开关状态
             config_updates["enable_student_info"] = self.enable_student_info
+            config_updates["enable_barcode"] = self.enable_barcode
 
             # 保存识别模式/题列布局（若对话框返回该字段）
             rec_updates = {}
@@ -2474,6 +3009,10 @@ class OMRGUI(QMainWindow):
             # 批量更新配置
             if config_updates:
                 config_manager.update(config_updates)
+
+            # 配置更新后同步刷新智能助手客户端，避免继续使用旧API参数
+            if self.smart_agent_dialog and getattr(self.smart_agent_dialog, "agent", None):
+                self.smart_agent_dialog.agent.update_config()
             
             # 更新状态显示
             self.status_label.setText("系统配置已更新")
@@ -2487,41 +3026,37 @@ class OMRGUI(QMainWindow):
 
     # 已移除：toggle_recognition_mode（识别模式不再由主界面切换）
 
-    def toggle_subjective_grading(self):
-        """切换主观题评分开关"""
-        self.enable_subjective = not self.enable_subjective
+    def toggle_subjective_grading(self, state):
+        self.enable_subjective = state == Qt.Checked
         if self.enable_subjective:
-            self.btn_subjective_toggle.setText("✅ 主观题: 开启")
-            self.btn_subjective_toggle.setStyleSheet(self.secondary_style)
             self.statusBar().showMessage("✅ 主观题评分已开启", 2000)
         else:
-            self.btn_subjective_toggle.setText("❌ 主观题: 关闭")
-            self.btn_subjective_toggle.setStyleSheet(self.toggle_off_style)
             self.statusBar().showMessage("⚠️ 主观题评分已关闭", 2000)
+        self.update_switch_status_labels()
     
-    def toggle_objective_grading(self):
-        """切换客观题阅卷开关"""
-        self.enable_objective = not self.enable_objective
+    def toggle_objective_grading(self, state):
+        self.enable_objective = state == Qt.Checked
         if self.enable_objective:
-            self.btn_objective_toggle.setText("✅ 客观题: 开启")
-            self.btn_objective_toggle.setStyleSheet(self.secondary_style)
             self.statusBar().showMessage("✅ 客观题阅卷已开启", 2000)
         else:
-            self.btn_objective_toggle.setText("❌ 客观题: 关闭")
-            self.btn_objective_toggle.setStyleSheet(self.toggle_off_style)
             self.statusBar().showMessage("⚠️ 客观题阅卷已关闭", 2000)
+        self.update_switch_status_labels()
 
-    def toggle_student_info_recognition(self):
-        """切换学生信息识别开关"""
-        self.enable_student_info = not self.enable_student_info
+    def toggle_student_info_recognition(self, state):
+        self.enable_student_info = state == Qt.Checked
         if self.enable_student_info:
-            self.btn_student_info_toggle.setText("✅ 学生信息: 开启")
-            self.btn_student_info_toggle.setStyleSheet(self.secondary_style)
             self.statusBar().showMessage("✅ 学生信息识别已开启", 2000)
         else:
-            self.btn_student_info_toggle.setText("❌ 学生信息: 关闭")
-            self.btn_student_info_toggle.setStyleSheet(self.toggle_off_style)
             self.statusBar().showMessage("⚠️ 学生信息识别已关闭", 2000)
+        self.update_switch_status_labels()
+
+    def toggle_barcode_recognition(self, state):
+        self.enable_barcode = state == Qt.Checked
+        if self.enable_barcode:
+            self.statusBar().showMessage("✅ 条形码识别已开启", 2000)
+        else:
+            self.statusBar().showMessage("⚠️ 条形码识别已关闭", 2000)
+        self.update_switch_status_labels()
 
     def export_data(self):
         """导出表格数据"""
@@ -2573,14 +3108,48 @@ class OMRGUI(QMainWindow):
 
     def open_smart_agent(self):
         """打开智能助手对话框"""
-        if self.smart_agent_dialog is None:
-            self.smart_agent_dialog = SmartAgentDialog(self)
-            self.smart_agent_dialog.config_applied.connect(self.on_smart_agent_config_applied)
-            # 不再连接 finished 信号来销毁实例，而是保持实例以保存上下文
-        
-        self.smart_agent_dialog.show()
-        self.smart_agent_dialog.raise_()
-        self.smart_agent_dialog.activateWindow()
+        if not self.assistant_panel.isVisible():
+            self.toggle_assistant_panel()
+        self.switch_main_page(0)
+        self.assistant_state_label.setText("右侧助手已启用")
+
+    def _to_objective_questions(self, answer_dict):
+        """将解析后的答案字典转换为界面表格使用的数据结构"""
+        objective_questions = {}
+        for q_num, q_data in sorted(answer_dict.items()):
+            answer = q_data.get("answer")
+            score = q_data.get("score", 1.0)
+            if isinstance(score, float):
+                score = round(score, 2)
+
+            objective_questions[q_num] = {
+                "type": "单选题" if isinstance(answer, str) else "多选题",
+                "score": score,
+                "answer": answer,
+                "options": q_data.get("options", 4),
+            }
+        return objective_questions
+
+    def _reload_objective_config_views(self):
+        """重新读取客观题配置文件并刷新主界面/配置面板"""
+        objective_path = config_manager.get_objective_answer_path()
+        if not objective_path or not os.path.exists(objective_path):
+            return False
+
+        answer_dict = self.parse_answer_txt(objective_path)
+        self.answer_key = answer_dict
+        self.system_config["objective_answer"] = answer_dict
+        self.system_config["answer_config_file"] = objective_path
+        self.answer_config_loaded.emit(answer_dict)
+
+        if self.system_config_panel is not None:
+            if hasattr(self.system_config_panel, "current_config"):
+                self.system_config_panel.current_config["objective_answer"] = answer_dict
+                self.system_config_panel.current_config["objective_answer_file"] = objective_path
+            self.system_config_panel.objective_questions = self._to_objective_questions(answer_dict)
+            self.system_config_panel.update_questions_table()
+
+        return True
 
     # on_smart_agent_closed 方法可以删除或保留但不再使用
     def on_smart_agent_closed(self):
@@ -2592,6 +3161,10 @@ class OMRGUI(QMainWindow):
         """智能助手配置应用后的回调"""
         self.auto_load_config()
         if config_type == 'objective':
+            try:
+                self._reload_objective_config_views()
+            except Exception as e:
+                print(f"刷新客观题配置界面失败: {e}")
             self.statusBar().showMessage("✅ 客观题配置已通过智能助手更新", 3000)
         elif config_type == 'subjective':
             self.statusBar().showMessage("✅ 主观题配置已通过智能助手更新", 3000)

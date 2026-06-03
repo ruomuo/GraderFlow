@@ -19,7 +19,7 @@ class ConfigManager:
             
         self.config_file = config_file
         self.default_config = {
-            "objective_answer_path": os.path.join("config", "answer_config", "answer_multiple.txt"),
+            "objective_answer_path": os.path.join("config", "answer_config", "objective_answer.txt"),
             "subjective_answer_path": os.path.join("config", "answer_config", "subjective_answer.txt"),
             "api_key": "",
             "api_base_url": "https://api.siliconflow.cn/v1",
@@ -301,29 +301,46 @@ class ConfigManager:
     def get_objective_answer_path(self) -> str:
         """获取客观题答案路径"""
         from utils.path_utils import get_config_file_path
-        path = self.get("objective_answer_path", "answer_multiple.txt")
-        # 如果是相对路径，转换为绝对路径
-        if not os.path.isabs(path):
-            path = get_config_file_path(os.path.basename(path))
-        return path
+        path = self.get("objective_answer_path", "objective_answer.txt")
+        basename = os.path.basename(path) if path else "objective_answer.txt"
+        if basename.lower() == "answer_multiple.txt":
+            basename = "objective_answer.txt"
+        if os.path.isabs(path):
+            if os.path.exists(path):
+                return path
+            # 兼容旧配置中的绝对路径（跨电脑后失效），自动回退到当前环境同名文件
+            fallback = get_config_file_path(basename)
+            return fallback
+        return get_config_file_path(basename)
     
     def get_subjective_answer_path(self) -> str:
         """获取主观题答案路径"""
         from utils.path_utils import get_config_file_path
-        path = self.get("subjective_answer_path", "test_subjective_answer.txt")
-        # 如果是相对路径，转换为绝对路径
-        if not os.path.isabs(path):
-            path = get_config_file_path(os.path.basename(path))
-        return path
+        path = self.get("subjective_answer_path", "subjective_answer.txt")
+        basename = os.path.basename(path) if path else "subjective_answer.txt"
+        if basename.lower() == "test_subjective_answer.txt":
+            basename = "subjective_answer.txt"
+        if os.path.isabs(path):
+            if os.path.exists(path):
+                return path
+            # 兼容旧配置中的绝对路径（跨电脑后失效），自动回退到当前环境同名文件
+            fallback = get_config_file_path(basename)
+            return fallback
+        return get_config_file_path(basename)
     
     def get_api_key(self) -> str:
         """获取API密钥 (自动处理试用期内置密钥)"""
         user_key = self.get("api_key", "")
-        # 如果用户配置了有效的Key（且不是默认提示文本），直接使用
-        # 增加长度校验，防止用户配置了截断的无效Key
-        if user_key and user_key.strip() and user_key != "your_api_key_here" and len(user_key) > 20:
+        # 如果用户配置了有效的Key（且不是默认提示文本或掩码文本），直接使用
+        normalized_key = user_key.strip() if isinstance(user_key, str) else ""
+        if (
+            normalized_key
+            and normalized_key != "your_api_key_here"
+            and "***" not in normalized_key
+            and set(normalized_key) != {"*"}
+        ):
             print("Using User API Key")
-            return user_key
+            return normalized_key
         
         # 检查是否处于试用期，如果是则返回内置Key
         try:

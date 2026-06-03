@@ -1,160 +1,229 @@
-# 智能阅卷系统 (Smart Marking System)
+# GraderFlow 智能阅卷系统
 
 ## 项目简介
-基于 Python + OpenCV + YOLOv5 + LLM 的智能阅卷系统，支持客观题（填涂识别）和主观题（手写识别与大模型评分）。
+GraderFlow 是一个面向学校、培训机构和考试场景的桌面端智能阅卷系统，基于 `Python + PySide6 + OpenCV + YOLOv5 + LLM` 构建，支持客观题识别、主观题 AI 评分、条形码识别、阅卷痕迹留存、报告联动预览和智能助手配置。
 
-本系统支持**3天全功能试用**，试用期结束后需通过激活码激活。激活过程采用**硬件绑定**与**远程服务器验证**机制，确保软件授权的安全性。
+该项目在研发过程中大量使用 `Claude Code` 协助完成界面重构、配置链路打通、AI 助手交互优化和打包交付能力建设，当前已完成商用落地并售出 `30+` 套。
 
-## 项目结构 (Project Structure)
+系统支持 `3` 天全功能试用，试用结束后可通过激活码完成授权，适合本地交付和独立部署。
 
+## 最新能力
+- 支持左侧导航式工作台，覆盖 `阅卷中心`、`阅卷痕迹`、`阅卷报告`、`数据统计`、`参数设置`。
+- 支持客观题与主观题混合阅卷，形成从配置到识别到导出的完整闭环。
+- 支持 AI 助手通过文字或图片自动生成客观题和主观题答案配置，并一键应用到系统。
+- 支持 AI 助手流式输出与模型思考展示，提升配置过程的可解释性。
+- 支持 API Key、API 地址、模型名称持久化保存，重启后自动加载，并可在界面内测试连接。
+- 支持条形码识别，将识别结果写入学号或准考证号字段。
+- 支持阅卷痕迹与报告文件自动归档，并在界面中联动预览。
+- 支持开发环境与打包环境的相对路径适配，提升跨电脑交付稳定性。
+
+## 典型场景
+- 批量扫描答题卡后，系统自动完成客观题识别与成绩汇总。
+- 对包含主观题的试卷，系统基于标准答案与提示词调用大模型进行评分。
+- 对新试卷或新题型，老师可直接通过 AI 助手输入自然语言或上传图片，自动生成答案配置。
+- 阅卷完成后，可查看阅卷痕迹、批改报告、统计信息，并导出 Excel 成绩单。
+
+## 核心功能
+
+### 客观题识别
+- 基于 OMR 流程识别答题卡填涂区域。
+- 支持单选题、多选题答案配置。
+- 支持题列布局配置、题组大小配置和 A/B 识别模式切换。
+- 支持标准评分与部分扣分等客观题评分规则。
+- 支持按 `题号:答案:分值:选项个数` 格式读取答案配置。
+
+### 主观题 AI 评分
+- 支持主观题题号、总分、参考答案、用户提示词配置。
+- 支持调用兼容 OpenAI 格式接口的大模型完成评分。
+- 支持主观题报告生成与归档。
+- 支持按需开启或关闭主观题评分流程。
+
+### 条形码与学生信息识别
+- 支持学生信息识别开关。
+- 支持条形码识别开关。
+- 支持 `pyzbar` 与图像回退策略结合的条形码识别流程。
+- 条形码识别结果可作为学号或准考证号字段使用。
+
+### AI 助手配置
+- 支持通过对话生成客观题配置块和主观题配置块。
+- 支持上传试卷图片辅助解析配置。
+- 支持流式输出，边生成边展示。
+- 支持模型思考内容显示，并在正式回答出现后收起思考区。
+- 支持一键应用客观题配置和主观题配置。
+- 支持配置应用后即时刷新到系统配置界面。
+- 支持 API Key、API 地址、模型名称的保存、自动回填和连接测试。
+
+### 阅卷痕迹与报告联动
+- 自动归档 `read` 目录中的阅卷痕迹文件。
+- 自动归档 `reports` 目录中的文本报告和图片报告。
+- 支持结果表与痕迹文件、报告文件联动。
+- 支持文本预览和图片预览双模式切换。
+- 在匹配不到目标文件时支持回退展示，避免联动区空白。
+
+### 统计与导出
+- 支持查看 `read` 与 `reports` 目录下的文件数量、体积和时间信息。
+- 支持在统计页浏览文件清单并直接预览。
+- 支持导出成绩到 `Excel` 或 `CSV`。
+- 支持批量阅卷结果汇总展示。
+
+## 界面工作流
+1. 在 `参数设置` 中配置答案、主观题、识别模式与 API 信息。
+2. 在 `阅卷中心` 选择单张图片或批量文件夹。
+3. 点击开始识别，系统执行客观题识别、主观题评分和学生信息提取。
+4. 在结果表查看每份试卷的识别结果、主观题分数和总分。
+5. 在 `阅卷痕迹` 与 `阅卷报告` 页面复核每份试卷的处理结果。
+6. 在 `数据统计` 页面查看文件总量、体积与归档情况。
+7. 按需导出成绩或继续通过 AI 助手调整配置。
+
+## AI 助手说明
+
+### 适合的使用方式
+- 直接输入题目答案，例如单选题、多选题和主观题采分点。
+- 上传标准答案图片或试卷截图，让模型辅助整理配置。
+- 让模型帮助生成符合系统格式的客观题配置和主观题配置。
+
+### 输出规则
+- 客观题会输出 `objective` 代码块，格式为 `题号:答案:分值:选项个数`。
+- 主观题会输出 `subjective` 代码块，格式为题头加采分点。
+- 用户点击应用后，系统会把配置写入 `config/answer_config/` 下对应文件并回刷界面。
+
+### 配置要求
+- 支持兼容 OpenAI 格式的接口。
+- 支持自定义 `API Key`、`Base URL` 和模型名称。
+- 支持在设置页点击“测试连接”验证配置是否有效。
+- 保存后的配置会写入 `config/config.json`，重启后自动加载。
+
+## 阅卷留痕说明
+
+### 留痕内容
+- 原始试卷图。
+- 标注后的识别图。
+- 识别过程记录。
+- 结果摘要信息。
+
+### 使用价值
+- 方便老师复核识别过程与识别结果。
+- 方便定位异常试卷、漏识别和误识别问题。
+- 方便在售后交付和问题排查中快速复现现场。
+
+## 项目结构
+
+```text
+GraderFlow/
+├── config/                     # 配置文件、答案文件、权重文件
+├── core/
+│   ├── data/                   # 数据模型
+│   ├── omr/                    # 客观题识别与阅卷主流程
+│   ├── subjective/             # 主观题评分与大模型调用
+│   └── llm_agent.py            # 智能助手核心逻辑
+├── interface/
+│   ├── dialogs/                # 激活、智能助手等对话组件
+│   └── main_window.py          # 主界面与工作台
+├── utils/                      # 配置管理、路径管理、导出等工具
+├── test_script/                # 调试和验证脚本
+├── main.py                     # 程序入口
+├── build_onefile.ps1           # 单文件打包脚本
+└── README.md
 ```
-MarkingSystem/
-├── config/                 # 配置文件
-│   ├── answer_config/      # 答案与题型配置
-│   │   ├── answer_multiple.txt
-│   │   ├── question_types.txt
-│   │   └── subjective_answer.txt
-│   ├── weights/            # 模型权重 (YOLOv5)
-│   ├── config.json         # 系统主配置
-│   ├── activation.dat      # 激活文件
-│   └── trial.dat           # 试用数据 (加密)
-├── core/                   # 核心业务逻辑
-│   ├── data/               # 数据模型
-│   │   └── student.py      # 学生信息模型
-│   ├── omr/                # 客观题识别 (Optical Mark Recognition)
-│   │   ├── processor.py    # 阅卷主流程
-│   │   ├── detector.py     # 区域检测 (YOLO/OpenCV)
-│   │   ├── recognizer.py   # 填涂识别算法
-│   │   └── pipeline.py     # 识别流水线封装
-│   ├── subjective/         # 主观题评分
-│   │   ├── grader.py       # 评分逻辑
-│   │   └── llm_api.py      # 大模型接口
-│   └── llm_agent.py        # 智能体核心逻辑 (New)
-├── interface/              # 界面与接口层
-│   ├── dialogs/            # 对话框组件
-│   │   ├── activation_dialog.py
-│   │   ├── system_config_dialog.py
-│   │   └── smart_agent_dialog.py # 智能助手界面
-│   ├── main_window.py      # PySide6 主窗口
-│   └── api.py              # Flask API 接口
-├── utils/                  # 通用工具
-│   ├── activation.py       # 激活验证
-│   ├── config_manager.py   # 配置管理 (单例)
-│   ├── path_utils.py       # 路径处理
-│   └── export.py           # 结果导出 (Excel)
-├── yolo/                   # YOLOv5 依赖
-│   ├── models/             # 模型定义
-│   └── utils/              # YOLO 工具函数
-├── tests/                  # 测试代码
-│   └── data/               # 测试图片数据
-├── main.py                 # 程序入口
-├── requirements.txt        # 项目依赖
-└── README.md               # 项目文档
-```
 
-## 架构概览 (Architecture)
+## 技术架构
 
 ```ascii
-+-----------+       +------------------------+       +------------------------+
-|  main.py  | ----> | interface.main_window  | <---> |  utils.config_manager  |
-+-----------+       | (PySide6 GUI)          |       |  (Configuration)       |
-      |             +------------------------+       +------------------------+
-      |                        |      ^
-      v                        v      |
-+------------------------+  +------------------------+      +---------------------------+
-|   core.omr.processor   |  |     interface.api      |      | interface.dialogs.        |
-|   (Main Logic Flow)    |  |     (Flask API)        |      | smart_agent_dialog        |
-+------------------------+  +------------------------+      +---------------------------+
-      |            |                                                    |
-      v            v                                                    v
-+-----------+  +-----------+       +----------------+         +-------------------+
-| core.omr. |  | core.omr. | ----> |   core.data.   |         |  core.llm_agent   |
-| detector  |  | recognizer|       |   student      |         |  (LLM Agent)      |
-+-----------+  +-----------+       +----------------+         +-------------------+
-      |              |
-      v              v
-+-----------+  +-----------+
-|   yolo/   |  | core.sub. |
-| (YOLOv5)  |  | llm_api   |
-+-----------+  +-----------+
++-----------+      +------------------------+      +-----------------------+
+|  main.py  | ---> | interface.main_window  | <--> | utils.config_manager  |
++-----------+      +------------------------+      +-----------------------+
+      |                        |                               |
+      v                        v                               v
++-------------------+   +--------------------+        +--------------------+
+| core.omr.processor|   | SmartAgentDialog   |        | path_utils/export  |
++-------------------+   +--------------------+        +--------------------+
+      |                        |                               |
+      v                        v                               v
++-------------------+   +--------------------+        +--------------------+
+| detector/recognizer|  | core.llm_agent     |        | config files       |
++-------------------+   +--------------------+        +--------------------+
+      |
+      v
++-------------------+
+| subjective grader |
++-------------------+
 ```
 
-## 功能特性 (Features)
+## 快速开始
 
-### 1. 智能阅卷 (Smart Marking)
-- **客观题识别**: 使用 OpenCV 和 YOLOv5 高精度定位和识别答题卡填涂。
-- **主观题评分**: 结合 OCR 和 LLM (大模型) 对手写内容进行语义评分。
-
-### 2. 智能助手 (Smart Assistant) `New`
-- **多模态交互**: 支持通过文字对话或上传试卷图片进行配置。
-- **自动配置**: 智能解析用户的自然语言指令或试卷图片，自动生成客观题和主观题的答案配置。
-- **流式对话**: 采用类似 ChatGPT 的流式输出体验，支持气泡式对话界面。
-- **模型支持**: 兼容 OpenAI 格式接口，内置支持 zai-org/GLM-4.6V, Qwen/Qwen3-VL 等多模态大模型。
-
-### 3. 系统管理
-- **试用与激活**: 内置 3 天全功能试用，支持安全的离线激活机制。
-- **配置管理**: 统一的 JSON 配置管理，支持 GUI 修改系统参数。
-
-## 模块说明 (Modules)
-
-### Core (核心层)
-- **omr.processor**: 包含 `omr_processing` 函数，是单张答题卡处理的核心入口，协调定位、识别和计分。
-- **omr.detector**: 负责答题卡关键区域（定位点、学号区、答题区）的检测与校正，集成 YOLOv5 推理。
-- **omr.recognizer**: 实现 `detect_rectangle_filling` 等算法，利用 OpenCV 判断填涂情况。
-- **subjective.grader**: 负责主观题区域的提取，并调用 LLM API 进行评分。
-- **llm_agent**: 封装与大模型的对话逻辑，支持文本和图片输入，处理流式响应。
-
-### Interface (接口层)
-- **main_window.py**: 基于 PySide6 的图形用户界面，提供批量阅卷、参数设置、结果导出等功能。
-- **dialogs/**: 包含系统配置、激活验证、智能助手等独立对话框组件。
-- **api.py**: 提供 HTTP 接口，支持通过 URL 或 Base64 上传图片进行阅卷。
-
-### Utils (工具层)
-- **config_manager**: 管理全局配置，支持自动加载和保存 `config.json`。
-- **activation**: 处理软件激活逻辑，验证机器码与激活码。
-- **path_utils**: 统一处理文件路径，适配开发环境与打包环境。
-
-## 环境依赖 (Requirements)
-
-请参考 `requirements.txt` 安装依赖：
+### 1. 安装依赖
 ```bash
 pip install -r requirements.txt
 ```
 
-主要依赖：
-- Python 3.8+
-- PySide6 (GUI)
-- OpenCV (图像处理)
-- PyTorch & Ultralytics (YOLOv5 推理)
-- Flask (Web API)
-- OpenAI (LLM 调用)
-- Pandas & OpenPyXL (Excel 导出)
-- Cryptography (数据加密)
+### 2. 启动程序
+```bash
+python main.py
+```
 
-## 迁移映射表 (Migration Map)
+### 3. 推荐运行环境
+- Python `3.8+`
+- Windows
+- 已安装 `PySide6`、`OpenCV`、`PyTorch`、`OpenAI` 等依赖
+- 如果使用条形码识别，需确保 `pyzbar` 及其依赖动态库可用
 
-| 原文件/路径 | 新文件/路径 | 说明 |
-|---|---|---|
-| `批量阅卷.py` | `interface/main_window.py` | GUI 逻辑移入 interface 包 |
-| (无) | `main.py` | 新增统一入口脚本 |
-| `config.json` | `config/config.json` | 配置文件归档 |
-| `activation.dat` | `config/activation.dat` | 激活文件归档 |
-| `answer_config/` | `config/answer_config/` | 答案配置目录移动 |
-| `utils/config_manager.py` | `utils/config_manager.py` | 保持不变 (已模块化) |
-| `answer_interface/det_recfg.py` | `core/omr/detector.py` | 检测逻辑重命名 |
-| `answer_interface/recognize_answer.py` | `core/omr/recognizer.py` | 识别逻辑重命名 |
-| `answer_interface/app.py` | `interface/api.py` | API 服务重命名 |
-| `yolo/` | `yolo/` | YOLO 依赖保持独立 |
-| `test_*.py` | (Deleted) | 旧测试脚本已清理 |
+## 配置说明
 
-## 快速开始 (Quick Start)
+### 主配置文件
+- 文件位置：`config/config.json`
+- 主要字段：
+- `objective_answer_path`：客观题答案文件路径
+- `subjective_answer_path`：主观题答案文件路径
+- `api_key`：大模型接口密钥
+- `api_base_url`：接口地址
+- `model_name`：当前模型名
+- `recognition.mode`：A/B 识别模式
+- `recognition.layout`：题列布局
+- `recognition.group_size`：每图题组大小
+- `enable_barcode`：是否启用条形码识别
 
-1. **安装依赖**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+### 答案配置文件
+- `config/answer_config/objective_answer.txt`
+- `config/answer_config/subjective_answer.txt`
 
-2. **运行程序**:
-   ```bash
-   python main.py
-   ```
+### 客观题格式示例
+```text
+1:A:1.0:4
+2:BC:1.0:4
+3:ABCD:2.0:4
+```
+
+### 主观题格式示例
+```text
+21题（10分）
+（1）叶绿体（+3）
+（2）光合作用（+2）
+```
+
+## 打包与交付
+- 项目支持通过 `PyInstaller` 打包为 Windows 可执行程序。
+- 当前仓库包含 `build_onefile.ps1`，用于单文件打包场景。
+- 项目已处理相对路径、答案文件路径和大部分配置持久化问题，适合本地交付。
+- 若启用条形码识别，打包时需确保 `pyzbar` 相关动态库被正确收集。
+
+## 主要依赖
+- `PySide6`
+- `OpenCV`
+- `PyTorch`
+- `OpenAI`
+- `Pandas`
+- `OpenPyXL`
+- `Flask`
+- `Cryptography`
+- `pyzbar`
+
+## 商用说明
+- 支持试用期与激活机制。
+- 支持本地独立部署与离线交付。
+- 当前版本已完成多轮业务迭代，具备真实教育场景落地能力。
+- 项目已售出 `30+` 套，验证了产品形态和交付可行性。
+
+## 后续规划
+- 优化自动更新与版本检测能力。
+- 继续提升打包体积和单文件交付体验。
+- 继续扩展 AI 助手在答案整理、异常解释和配置审查场景中的能力。

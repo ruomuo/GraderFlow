@@ -69,12 +69,16 @@ test_img/
 processed_img/
 temp_deskewed/
 read/
+reports/
 batch_img/
 test_read/
 undet_img/
 debug_code/
 *.log
 *.dat
+*.zip
+智能阅卷系统（版本号：*）/
+智能阅卷系统*/
 
 # Large model weights (optional, usually ignored)
 # *.pt

@@ -70,7 +70,7 @@ def parse_question_types(file_path):
     return question_types
 
 
-def parse_multiple_choice_answers(file_path):
+def parse_multiple_choice_answers(file_path, verbose: bool = False):
     """
     解析支持多选题的答案配置文件
     
@@ -138,7 +138,8 @@ def parse_multiple_choice_answers(file_path):
                         # 存储选项个数
                         options[question_num] = option_count
                         
-                        print(f"题目 {question_num}: 答案={answers[question_num]}, 分值={scores[question_num]}, 选项数={option_count}")
+                        if verbose:
+                            print(f"题目 {question_num}: 答案={answers[question_num]}, 分值={scores[question_num]}, 选项数={option_count}")
                         
                     except ValueError as e:
                         print(f"警告：第{line_num}行格式错误: {line} - {e}")
@@ -187,7 +188,7 @@ if __name__ == "__main__":
     print(f"题目类型配置: {question_types}")
     
     print("\n=== 测试答案配置解析 ===")
-    answers, scores, options = parse_multiple_choice_answers("answer_multiple.txt")
+    answers, scores, options = parse_multiple_choice_answers("objective_answer.txt", verbose=True)
     print(f"答案配置: {answers}")
     print(f"分值配置: {scores}")
     print(f"选项配置: {options}")

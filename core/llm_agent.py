@@ -6,6 +6,7 @@ from utils.config_manager import config_manager
 
 class LLMAgent:
     """智能助手代理类"""
+    THINKING_TOKEN_PREFIX = "__GF_THINK__:"
     
     def __init__(self):
         self.api_key = config_manager.get_api_key()
@@ -74,6 +75,8 @@ class LLMAgent:
                 api_key=self.api_key,
                 base_url=self.base_url
             )
+        else:
+            self.client = None
 
     def _encode_image(self, image_path: str) -> str:
         """编码图片为base64"""
@@ -115,8 +118,19 @@ class LLMAgent:
             
             collected_content = ""
             for chunk in response:
-                if chunk.choices[0].delta.content:
-                    content = chunk.choices[0].delta.content
+                # 某些流式分片可能不包含 choices，避免下标越界
+                choices = getattr(chunk, "choices", None)
+                if not choices:
+                    continue
+                first_choice = choices[0]
+                delta = getattr(first_choice, "delta", None)
+                reasoning = None
+                if delta:
+                    reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                if reasoning:
+                    yield f"{self.THINKING_TOKEN_PREFIX}{reasoning}"
+                content = getattr(delta, "content", None) if delta else None
+                if content:
                     collected_content += content
                     yield content
             

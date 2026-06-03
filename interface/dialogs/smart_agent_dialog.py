@@ -68,6 +68,7 @@ class ChatThread(QThread):
 class SmartAgentDialog(QDialog):
     """智能助手对话框"""
     config_applied = Signal(str)  # 信号：配置已应用 (type: 'objective' or 'subjective')
+    THINKING_TOKEN_PREFIX = "__GF_THINK__:"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -252,6 +253,9 @@ class SmartAgentDialog(QDialog):
         msg = self.input_box.toPlainText().strip()
         if not msg and not self.selected_image_path:
             return
+        
+        # 每次发送前刷新一次配置，避免“设置里已更新Key但助手仍使用旧配置”
+        self.agent.update_config()
             
         # 显示用户消息
         user_msg = msg
@@ -273,6 +277,8 @@ class SmartAgentDialog(QDialog):
         
         # 准备接收助手消息 (创建AI气泡)
         self.current_response = ""
+        self.current_thinking = ""
+        self.answer_started = False
         self.append_ai_bubble_start()
         self.thread.start()
 
@@ -338,7 +344,14 @@ class SmartAgentDialog(QDialog):
         self.chat_history.ensureCursorVisible()
 
     def on_token_received(self, token):
-        self.current_response += token
+        if token.startswith(self.THINKING_TOKEN_PREFIX):
+            thinking_delta = token[len(self.THINKING_TOKEN_PREFIX):]
+            if not self.answer_started and thinking_delta:
+                self.current_thinking += thinking_delta
+        else:
+            if token:
+                self.answer_started = True
+                self.current_response += token
         
         # 实时更新（简单追加文本，不带样式，避免HTML破坏）
         # 我们删除之前的 "AI Thinking..." 或之前的 token 内容，重新插入？
@@ -354,8 +367,24 @@ class SmartAgentDialog(QDialog):
         # 追加 token 无法处理 Markdown（如加粗需要闭合标签）。
         # 所以通常做法是：清空当前段落 -> 渲染 Markdown -> 插入 HTML。
         
-        # 渲染当前 Markdown
+        # 渲染当前 Markdown（正文出现后自动收起思考区）
         html_content = self.format_markdown(self.current_response)
+        thinking_block = ""
+        if self.current_thinking:
+            if self.answer_started:
+                thinking_block = """
+                <div style="margin-bottom: 8px; color: #7f8c8d; font-size: 12px; background: #f4f6f8; border-radius: 6px; padding: 6px 8px;">
+                    已进入正式回答，思考过程已自动收起
+                </div>
+                """
+            else:
+                thinking_html = self.format_markdown(self.current_thinking)
+                thinking_block = f"""
+                <div style="margin-bottom: 8px; background: #f4f6f8; border-left: 3px solid #95a5a6; border-radius: 6px; padding: 8px 10px;">
+                    <div style="color: #7f8c8d; font-size: 12px; margin-bottom: 4px;">模型思考中...</div>
+                    <div style="color: #2c3e50;">{thinking_html}</div>
+                </div>
+                """
         
         # 这里用一个简易的 AI Bubble 包装
         bubble_html = f"""
@@ -372,6 +401,7 @@ class SmartAgentDialog(QDialog):
                         border: 1px solid #E0E0E0;
                         display: inline-block;
                     ">
+                        {thinking_block}
                         {html_content}
                     </div>
                 </td>
@@ -407,6 +437,18 @@ class SmartAgentDialog(QDialog):
         cursor.movePosition(QTextCursor.End, QTextCursor.KeepAnchor)
         
         html_content = self.format_markdown(self.current_response)
+        thinking_block = ""
+        if self.current_thinking:
+            thinking_block = """
+            <div style="margin-bottom: 8px; color: #7f8c8d; font-size: 12px; background: #f4f6f8; border-radius: 6px; padding: 6px 8px;">
+                已进入正式回答，思考过程已自动收起
+            </div>
+            """ if self.answer_started else f"""
+            <div style="margin-bottom: 8px; background: #f4f6f8; border-left: 3px solid #95a5a6; border-radius: 6px; padding: 8px 10px;">
+                <div style="color: #7f8c8d; font-size: 12px; margin-bottom: 4px;">模型思考</div>
+                <div style="color: #2c3e50;">{self.format_markdown(self.current_thinking)}</div>
+            </div>
+            """
         bubble_html = f"""
         <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-bottom: 10px;">
             <tr>
@@ -421,6 +463,7 @@ class SmartAgentDialog(QDialog):
                         border: 1px solid #E0E0E0;
                         display: inline-block;
                     ">
+                        {thinking_block}
                         {html_content}
                     </div>
                 </td>
@@ -569,4 +612,3 @@ class SmartAgentDialog(QDialog):
             
         except Exception as e:
             QMessageBox.critical(self, "错误", f"保存失败: {str(e)}")
-

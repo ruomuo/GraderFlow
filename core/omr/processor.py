@@ -137,13 +137,18 @@ def process_objective_questions(student: StudentInfo, answer_key: dict, question
         except Exception:
             recognition_group_size = 5
 
-        recognition_results, detailed_results = recognize_answer_main(
+        recognize_main_output = recognize_answer_main(
             mode=recognition_mode,
             question_types_file=question_types_file,
             answer_config_file=answer_config_file,
             layout=recognition_layout,
             group_size=recognition_group_size,
         )
+        if isinstance(recognize_main_output, tuple) and len(recognize_main_output) == 2:
+            recognition_results, detailed_results = recognize_main_output
+        else:
+            recognition_results, detailed_results = {}, {}
+            student.add_recognition_log("客观题识别返回异常，已降级为空结果")
         
         # 将识别结果添加到学生答案中
         print(f"🔍 客观题识别结果调试:")
@@ -293,6 +298,90 @@ def process_student_info(student: StudentInfo, image_path: str, api_key: str, gu
         student.has_name_id = False
 
 
+def recognize_barcode_value(image_path: str) -> str:
+    try:
+        image = cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            return ""
+    except Exception:
+        return ""
+
+    candidates = []
+    try:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 41, 5)
+        enlarged = cv2.resize(image, None, fx=1.8, fy=1.8, interpolation=cv2.INTER_CUBIC)
+        candidates = [image, gray, binary, enlarged]
+    except Exception:
+        candidates = [image]
+
+    values = []
+
+    if hasattr(cv2, "barcode_BarcodeDetector"):
+        detector = cv2.barcode_BarcodeDetector()
+        for candidate in candidates:
+            try:
+                ret = detector.detectAndDecode(candidate)
+                decoded_info = []
+                if isinstance(ret, tuple):
+                    if len(ret) == 4:
+                        ok, decoded_info, _, _ = ret
+                        if not ok:
+                            decoded_info = []
+                    elif len(ret) == 3:
+                        decoded_info, _, _ = ret
+                for text in decoded_info or []:
+                    text = str(text).strip()
+                    if text:
+                        values.append(text)
+            except Exception:
+                continue
+            if values:
+                break
+
+    if not values:
+        try:
+            from pyzbar.pyzbar import decode
+            for candidate in candidates:
+                decoded = decode(candidate)
+                for item in decoded:
+                    text = item.data.decode("utf-8", errors="ignore").strip()
+                    if text:
+                        values.append(text)
+                if values:
+                    break
+        except Exception as e:
+            print(f"pyzbar不可用或识别失败: {e}")
+
+    unique_values = []
+    seen = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        unique_values.append(value)
+    return unique_values[0] if unique_values else ""
+
+
+def process_barcode_info(student: StudentInfo, image_path: str, original_image_path: str = None, gui_window=None) -> None:
+    try:
+        show_progress("正在识别条形码（用于学号/准考证号）...", gui_window=gui_window)
+        barcode_value = recognize_barcode_value(image_path)
+        if not barcode_value and original_image_path and original_image_path != image_path:
+            show_progress("纠偏图未识别到条形码，尝试原图识别...", gui_window=gui_window)
+            barcode_value = recognize_barcode_value(original_image_path)
+        if barcode_value:
+            student.student_id = barcode_value
+            show_progress(f"条形码识别成功: {barcode_value}", gui_window=gui_window)
+            student.add_recognition_log(f"条形码识别成功: {barcode_value}")
+        else:
+            show_progress("未识别到条形码（已尝试纠偏图与原图）", gui_window=gui_window)
+            student.add_recognition_log("未识别到条形码（已尝试纠偏图与原图）")
+    except Exception as e:
+        show_progress(f"条形码识别异常: {str(e)}", gui_window=gui_window)
+        student.add_recognition_log(f"条形码识别异常: {str(e)}")
+
+
 def process_subjective_questions(student: StudentInfo, subjective_answer_file: str, api_key: str, subjective_config: dict = None, gui_window=None, image_path: str = None) -> None:
     """
     处理主观题阅卷
@@ -434,7 +523,7 @@ def _generate_subjective_report_direct(student: StudentInfo, grading_result: dic
 
 
 def omr_processing(image_path: str, answer_key: dict, api_key: str, subjective_answer_file: str = None, 
-                  recognition_mode: str = "B", enable_subjective: bool = True, enable_objective: bool = True, enable_student_info: bool = True, question_types: dict = None, question_types_file: str = None, answer_config_file: str = None, subjective_config: dict = None, gui_window=None) -> StudentInfo:
+                  recognition_mode: str = "B", enable_subjective: bool = True, enable_objective: bool = True, enable_student_info: bool = True, enable_barcode: bool = False, question_types: dict = None, question_types_file: str = None, answer_config_file: str = None, subjective_config: dict = None, gui_window=None) -> StudentInfo:
     """
     OMR处理主函数，支持客观题和主观题阅卷
     
@@ -447,6 +536,7 @@ def omr_processing(image_path: str, answer_key: dict, api_key: str, subjective_a
         enable_subjective: 是否启用主观题评分，默认为True
         enable_objective: 是否启用客观题评分，默认为True
         enable_student_info: 是否启用学生信息识别，默认为True
+        enable_barcode: 是否启用条形码识别并写入学号，默认为False
         question_types: 题目类型配置（可选）
         question_types_file: 题目类型配置文件路径（可选）
         answer_config_file: 答案配置文件路径（可选，用于获取选项数量配置）
@@ -531,6 +621,11 @@ def omr_processing(image_path: str, answer_key: dict, api_key: str, subjective_a
             process_student_info(student, processing_image_path, api_key, gui_window)
         else:
             show_progress("学生信息识别已禁用，跳过学生信息识别", gui_window=gui_window)
+
+        if enable_barcode:
+            process_barcode_info(student, processing_image_path, image_path, gui_window)
+        else:
+            show_progress("条形码识别已禁用，跳过条形码识别", gui_window=gui_window)
         
         # 6. 处理主观题
         if enable_subjective and subjective_answer_file:

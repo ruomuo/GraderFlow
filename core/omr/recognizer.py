@@ -1483,10 +1483,10 @@ def recognize_answer_main(mode="B", question_types_file=None, start_number=1, an
             print(f"加载题目类型配置文件失败: {e}")
             print("将使用默认配置（所有题目为单选题）")
 
-    if (not answer_config_file or not os.path.exists(answer_config_file)) and os.path.exists(os.path.join(project_root, "config", "answer_config", "answer_multiple.txt")):
+    if (not answer_config_file or not os.path.exists(answer_config_file)) and os.path.exists(os.path.join(project_root, "config", "answer_config", "objective_answer.txt")):
         if not question_types or all(t == 'single' for t in question_types.values()):
             try:
-                fallback_path = os.path.join(project_root, "config", "answer_config", "answer_multiple.txt")
+                fallback_path = os.path.join(project_root, "config", "answer_config", "objective_answer.txt")
                 answers_config, _, options_config = parse_multiple_choice_answers(fallback_path)
                 if answers_config:
                     question_types = {}
@@ -1522,17 +1522,17 @@ def recognize_answer_main(mode="B", question_types_file=None, start_number=1, an
         print(f"请确保以下路径之一存在：")
         print(f"  1. {yolo_answer_path} (YOLOv5检测结果)")
         print(f"  2. {current_answer_path} (当前目录)")
-        return
+        return {}, {}
     if not os.path.exists(answer_area_path):
         print(f"错误：找不到文件夹 {answer_area_path}")
-        return
+        return {}, {}
     
     # 获取排序后的文件列表
     sorted_files = get_sorted_files(answer_area_path, mode)
     
     if not sorted_files:
         print(f"错误：在 {answer_area_path} 文件夹中没有找到图片文件")
-        return
+        return {}, {}
     
     print(f"使用{mode}模式，找到 {len(sorted_files)} 个图片文件")
     
